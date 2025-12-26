@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { NovelSettings, Genre, Language } from '../types';
-import { BookOpen, PenTool, Sparkles, Globe, Wand2, Loader2 } from 'lucide-react';
+import { NovelSettings, Genre, Language, ModelProvider, WritingTone, WritingStyle, NarrativePerspective } from '../types';
+import { BookOpen, PenTool, Sparkles, Globe, Wand2, Loader2, Bot, Key, Server, Feather, Eye, Mic2 } from 'lucide-react';
 import { generatePremise } from '../services/geminiService';
 
 interface SettingsFormProps {
@@ -22,13 +22,12 @@ const GENRE_LABELS: Record<Genre, string> = {
 const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange, onSubmit, isLoading }) => {
   const [isGeneratingPremise, setIsGeneratingPremise] = useState(false);
   
-  const handleChange = (field: keyof NovelSettings, value: string | number) => {
+  const handleChange = (field: keyof NovelSettings, value: any) => {
     onSettingsChange({ ...settings, [field]: value });
   };
 
   const handleAiGeneratePremise = async () => {
     if (!settings.title && !settings.premise) {
-        // A minimal shake animation or alert could go here, for now just simple alert
         alert("请至少输入标题或一些想法 (Please enter a title or some ideas first)");
         return;
     }
@@ -38,20 +37,19 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
         const result = await generatePremise(
             settings.title, 
             settings.premise, 
-            settings.genre, 
-            settings.language
+            settings
         );
         handleChange('premise', result);
     } catch (error) {
         console.error(error);
-        alert("无法生成概要，请稍后重试。");
+        alert("无法生成概要，请检查配置。");
     } finally {
         setIsGeneratingPremise(false);
     }
   };
 
   return (
-    <div className="max-w-2xl mx-auto p-6 bg-white rounded-xl shadow-sm border border-gray-200 mt-10">
+    <div className="max-w-2xl mx-auto p-6 bg-white rounded-xl shadow-sm border border-gray-200 mt-10 mb-10">
       <div className="flex items-center space-x-3 mb-6 pb-4 border-b border-gray-100">
         <div className="p-2 bg-indigo-100 rounded-lg">
           <BookOpen className="w-6 h-6 text-indigo-600" />
@@ -62,7 +60,64 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
         </div>
       </div>
 
-      <div className="space-y-5">
+      <div className="space-y-6">
+        
+        {/* Model Configuration Section */}
+        <div className="p-4 bg-gray-50 rounded-lg border border-gray-200 space-y-4">
+             <div className="flex items-center space-x-2 text-indigo-700 font-medium">
+                <Bot size={18} />
+                <span>模型配置 (AI Model Settings)</span>
+             </div>
+             
+             <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Provider (服务商)</label>
+                <select
+                    value={settings.provider}
+                    onChange={(e) => handleChange('provider', e.target.value as ModelProvider)}
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-1 focus:ring-indigo-500 outline-none"
+                >
+                    <option value="gemini">Google Gemini (Default)</option>
+                    <option value="alibaba">阿里百炼 (Alibaba Bailian / Qwen)</option>
+                    <option value="volcano">火山引擎 (Volcano / Doubao)</option>
+                </select>
+             </div>
+
+             {settings.provider !== 'gemini' && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">API Key</label>
+                        <div className="relative">
+                            <input 
+                                type="password" 
+                                value={settings.apiKey || ''}
+                                onChange={(e) => handleChange('apiKey', e.target.value)}
+                                placeholder="sk-..."
+                                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-1 focus:ring-indigo-500 outline-none pl-8"
+                            />
+                            <Key size={14} className="absolute left-2.5 top-2.5 text-gray-400" />
+                        </div>
+                    </div>
+                    <div>
+                        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                            {settings.provider === 'volcano' ? 'Endpoint ID (接入点 ID)' : 'Model Name (模型名称)'}
+                        </label>
+                         <div className="relative">
+                            <input 
+                                type="text" 
+                                value={settings.modelName || ''}
+                                onChange={(e) => handleChange('modelName', e.target.value)}
+                                placeholder={settings.provider === 'volcano' ? 'ep-2024...' : 'qwen-plus'}
+                                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-1 focus:ring-indigo-500 outline-none pl-8"
+                            />
+                            <Server size={14} className="absolute left-2.5 top-2.5 text-gray-400" />
+                        </div>
+                        {settings.provider === 'volcano' && <p className="text-[10px] text-gray-400 mt-1">Found in Volcano Console: "Endpoint ID"</p>}
+                    </div>
+                </div>
+             )}
+        </div>
+
+
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">小说标题 (Title)</label>
           <input
@@ -128,6 +183,66 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
           </div>
         </div>
 
+        {/* Writing Style Section */}
+        <div className="p-4 bg-orange-50 rounded-lg border border-orange-100 space-y-4">
+             <div className="flex items-center space-x-2 text-orange-800 font-medium">
+                <Feather size={18} />
+                <span>写作风格 (Writing Style)</span>
+             </div>
+             
+             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 flex items-center gap-1">
+                    <Mic2 size={12}/> Tone (基调)
+                  </label>
+                  <select
+                    value={settings.writingTone}
+                    onChange={(e) => handleChange('writingTone', e.target.value as WritingTone)}
+                    className="w-full px-3 py-2 text-sm border border-orange-200 rounded-md focus:ring-1 focus:ring-orange-400 outline-none bg-white"
+                  >
+                    <option value="Neutral">中性 (Neutral)</option>
+                    <option value="Dark">暗黑/压抑 (Dark)</option>
+                    <option value="Humorous">幽默 (Humorous)</option>
+                    <option value="Melancholic">忧伤 (Melancholic)</option>
+                    <option value="Fast-paced">快节奏 (Fast-paced)</option>
+                    <option value="Romantic">浪漫 (Romantic)</option>
+                    <option value="Cynical">愤世嫉俗 (Cynical)</option>
+                  </select>
+                </div>
+
+                <div>
+                   <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 flex items-center gap-1">
+                      <Feather size={12}/> Style (文笔)
+                   </label>
+                   <select
+                    value={settings.writingStyle}
+                    onChange={(e) => handleChange('writingStyle', e.target.value as WritingStyle)}
+                    className="w-full px-3 py-2 text-sm border border-orange-200 rounded-md focus:ring-1 focus:ring-orange-400 outline-none bg-white"
+                   >
+                     <option value="Simple">通俗易懂 (Simple)</option>
+                     <option value="Moderate">标准 (Moderate)</option>
+                     <option value="Complex">辞藻华丽 (Complex)</option>
+                     <option value="Poetic">诗意 (Poetic)</option>
+                   </select>
+                </div>
+
+                <div>
+                   <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 flex items-center gap-1">
+                      <Eye size={12}/> Perspective (视角)
+                   </label>
+                   <select
+                    value={settings.narrativePerspective}
+                    onChange={(e) => handleChange('narrativePerspective', e.target.value as NarrativePerspective)}
+                    className="w-full px-3 py-2 text-sm border border-orange-200 rounded-md focus:ring-1 focus:ring-orange-400 outline-none bg-white"
+                   >
+                     <option value="Third Person Limited">第三人称限知 (3rd Person Limited)</option>
+                     <option value="Third Person Omniscient">第三人称全知 (3rd Person Omniscient)</option>
+                     <option value="First Person">第一人称 (1st Person "I")</option>
+                   </select>
+                </div>
+             </div>
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
            <div>
              <label className="block text-sm font-medium text-gray-700 mb-1">章节数量 (Chapters)</label>
@@ -155,7 +270,6 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
              </div>
           </div>
         </div>
-        <p className="text-xs text-gray-500">默认设置为 3000 字 (短篇小说)</p>
 
         <div className="pt-4">
           <button
@@ -169,10 +283,7 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
           >
             {isLoading ? (
               <span className="flex items-center">
-                <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
+                <Loader2 className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" />
                 正在生成大纲...
               </span>
             ) : (
