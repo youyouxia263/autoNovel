@@ -30,13 +30,6 @@ async function withRetry<T>(operation: () => Promise<T>, retries = 3, baseDelay 
     throw lastError;
 }
 
-const getProviderConfig = (settings: NovelSettings) => {
-  if (settings.provider === 'gemini') {
-    return { apiKey: GEMINI_API_KEY, model: 'gemini-3-flash-preview' }; // Default gemini model
-  }
-  return { apiKey: settings.apiKey, model: settings.modelName };
-};
-
 // --- OpenAI-Compatible Stream Parser Helper ---
 async function* streamOpenAICompatible(url: string, apiKey: string, model: string, messages: any[], systemInstruction?: string, temperature: number = 0.7) {
   const headers = {
@@ -141,9 +134,10 @@ async function fetchOpenAICompatible(url: string, apiKey: string, model: string,
 
 // --- Provider Specifics ---
 
-const getBaseUrl = (provider: ModelProvider) => {
-    if (provider === 'alibaba') return "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
-    if (provider === 'volcano') return "https://ark.cn-beijing.volces.com/api/v3/chat/completions";
+const getBaseUrl = (settings: NovelSettings) => {
+    if (settings.provider === 'alibaba') return "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
+    if (settings.provider === 'volcano') return "https://ark.cn-beijing.volces.com/api/v3/chat/completions";
+    if (settings.provider === 'custom') return settings.baseUrl || "";
     return "";
 }
 
@@ -178,8 +172,9 @@ export const generatePremise = async (title: string, currentPremise: string, set
   // Gemini Path
   if (settings.provider === 'gemini') {
       const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+      const model = settings.modelName || "gemini-3-flash-preview";
       const response = await withRetry(() => ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: model,
         contents: promptText,
         config: { systemInstruction },
       }));
@@ -187,7 +182,7 @@ export const generatePremise = async (title: string, currentPremise: string, set
   }
   
   // External Provider Path
-  const url = getBaseUrl(settings.provider);
+  const url = getBaseUrl(settings);
   const apiKey = settings.apiKey || "";
   const model = settings.modelName || (settings.provider === 'alibaba' ? 'qwen-plus' : '');
   
@@ -219,15 +214,16 @@ export const summarizeChapter = async (content: string, settings: NovelSettings)
 
   if (settings.provider === 'gemini') {
       const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+      const model = settings.modelName || "gemini-3-flash-preview";
       const response = await withRetry(() => ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: model,
         contents: promptText,
         config: { systemInstruction }
       }));
       return response.text || "";
   }
 
-  const url = getBaseUrl(settings.provider);
+  const url = getBaseUrl(settings);
   const apiKey = settings.apiKey || "";
   const model = settings.modelName || (settings.provider === 'alibaba' ? 'qwen-plus' : '');
   
@@ -264,6 +260,7 @@ export const generateOutline = async (settings: NovelSettings): Promise<Omit<Cha
   // Gemini (with JSON Schema)
   if (settings.provider === 'gemini') {
       const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+      const model = settings.modelName || "gemini-3-flash-preview";
       const responseSchema: Schema = {
         type: Type.ARRAY,
         items: {
@@ -278,7 +275,7 @@ export const generateOutline = async (settings: NovelSettings): Promise<Omit<Cha
       };
 
       const response = await withRetry(() => ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: model,
         contents: promptText,
         config: {
           responseMimeType: "application/json",
@@ -292,13 +289,12 @@ export const generateOutline = async (settings: NovelSettings): Promise<Omit<Cha
   }
 
   // External Providers (Prompt Engineering for JSON)
-  // Most don't support strict schema mode reliably via standard OpenAI compat API without specific params, so we prompt for JSON.
   const jsonPrompt = `${promptText}
   
   IMPORTANT: Return valid JSON ONLY. No markdown formatting. No \`\`\`json block.
   Format: [{"id": 1, "title": "...", "summary": "..."}, ...]`;
 
-  const url = getBaseUrl(settings.provider);
+  const url = getBaseUrl(settings);
   const apiKey = settings.apiKey || "";
   const model = settings.modelName || (settings.provider === 'alibaba' ? 'qwen-plus' : '');
   
@@ -338,6 +334,7 @@ export const generateCharacters = async (settings: NovelSettings): Promise<Chara
   // Gemini (with JSON Schema)
   if (settings.provider === 'gemini') {
       const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+      const model = settings.modelName || "gemini-3-flash-preview";
       const responseSchema: Schema = {
         type: Type.ARRAY,
         items: {
@@ -353,7 +350,7 @@ export const generateCharacters = async (settings: NovelSettings): Promise<Chara
       };
 
       const response = await withRetry(() => ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: model,
         contents: promptText,
         config: {
           responseMimeType: "application/json",
@@ -372,7 +369,7 @@ export const generateCharacters = async (settings: NovelSettings): Promise<Chara
   IMPORTANT: Return valid JSON ONLY. No markdown formatting.
   Format: [{"name": "...", "role": "...", "description": "...", "relationships": "..."}, ...]`;
 
-  const url = getBaseUrl(settings.provider);
+  const url = getBaseUrl(settings);
   const apiKey = settings.apiKey || "";
   const model = settings.modelName || (settings.provider === 'alibaba' ? 'qwen-plus' : '');
   
@@ -424,15 +421,16 @@ export const checkConsistency = async (chapterContent: string, characters: Chara
 
   if (settings.provider === 'gemini') {
       const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+      const model = settings.modelName || "gemini-3-flash-preview";
       const response = await withRetry(() => ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: model,
         contents: promptText,
         config: { systemInstruction }
       }));
       return response.text || "Consistent";
   }
 
-  const url = getBaseUrl(settings.provider);
+  const url = getBaseUrl(settings);
   const apiKey = settings.apiKey || "";
   const model = settings.modelName || (settings.provider === 'alibaba' ? 'qwen-plus' : '');
   
@@ -491,16 +489,22 @@ export const generateChapterStream = async function* (
   // Gemini Path
   if (settings.provider === 'gemini') {
       const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
-      // Wrap the stream initialization in a retry. 
-      // Note: we can't retry inside the generator loop easily if we want to stream partial results, 
-      // but we CAN retry the initial connection.
+      const model = settings.modelName || "gemini-3-pro-preview";
+      const isDefaultModel = !settings.modelName;
+
+      // Only enable thinking budget if using the default high-quality model, 
+      // or if user hasn't specified a model (safest default). 
+      // If user forces a different model (e.g. gemini-2.0-flash-exp), we assume they know what they are doing.
+      // But thinkingConfig is only for 2.5/3 series.
+      const config: any = { systemInstruction };
+      if (isDefaultModel) {
+          config.thinkingConfig = { thinkingBudget: 2048 };
+      }
+
       const stream = await withRetry(() => ai.models.generateContentStream({
-        model: "gemini-3-pro-preview",
+        model: model,
         contents: promptText,
-        config: { 
-            systemInstruction,
-            thinkingConfig: { thinkingBudget: 2048 } 
-        }
+        config: config
       }));
 
       for await (const chunk of stream) {
@@ -510,13 +514,12 @@ export const generateChapterStream = async function* (
   }
 
   // External Provider Path
-  const url = getBaseUrl(settings.provider);
+  const url = getBaseUrl(settings);
   const apiKey = settings.apiKey || "";
   const model = settings.modelName || (settings.provider === 'alibaba' ? 'qwen-plus' : '');
 
   if (!url || !apiKey || !model) throw new Error("Missing configuration");
 
-  // streamOpenAICompatible has its own retry logic for the fetch call
   const stream = streamOpenAICompatible(url, apiKey, model, [{role: 'user', content: promptText}], systemInstruction);
   for await (const text of stream) {
       yield text;
@@ -559,8 +562,9 @@ export const continueWriting = async function* (
 
   if (settings.provider === 'gemini') {
       const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+      const model = settings.modelName || "gemini-3-flash-preview"; // Use Flash for quick continue unless override
       const stream = await withRetry(() => ai.models.generateContentStream({
-        model: "gemini-3-flash-preview",
+        model: model,
         contents: promptText,
         config: { systemInstruction }
       }));
@@ -571,7 +575,7 @@ export const continueWriting = async function* (
       return;
   }
 
-  const url = getBaseUrl(settings.provider);
+  const url = getBaseUrl(settings);
   const apiKey = settings.apiKey || "";
   const model = settings.modelName || (settings.provider === 'alibaba' ? 'qwen-plus' : '');
 

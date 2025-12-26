@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { NovelSettings, Genre, Language, ModelProvider, WritingTone, WritingStyle, NarrativePerspective } from '../types';
-import { BookOpen, PenTool, Sparkles, Globe, Wand2, Loader2, Bot, Key, Server, Feather, Eye, Mic2 } from 'lucide-react';
+import { BookOpen, PenTool, Sparkles, Globe, Wand2, Loader2, Bot, Key, Server, Feather, Eye, Mic2, Link } from 'lucide-react';
 import { generatePremise } from '../services/geminiService';
 
 interface SettingsFormProps {
@@ -76,15 +76,17 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
                     onChange={(e) => handleChange('provider', e.target.value as ModelProvider)}
                     className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-1 focus:ring-indigo-500 outline-none"
                 >
-                    <option value="gemini">Google Gemini (Default)</option>
-                    <option value="alibaba">阿里百炼 (Alibaba Bailian / Qwen)</option>
-                    <option value="volcano">火山引擎 (Volcano / Doubao)</option>
+                    <option value="gemini">Google Gemini</option>
+                    <option value="alibaba">阿里百炼 (Alibaba Bailian)</option>
+                    <option value="volcano">火山引擎 (Volcano Engine)</option>
+                    <option value="custom">Custom (OpenAI Compatible)</option>
                 </select>
              </div>
 
-             {settings.provider !== 'gemini' && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
+             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                 {/* API Key - Hidden for Gemini */}
+                 {settings.provider !== 'gemini' && (
+                    <div className={settings.provider === 'custom' ? "col-span-1" : "col-span-2 md:col-span-1"}>
                         <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">API Key</label>
                         <div className="relative">
                             <input 
@@ -97,24 +99,49 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
                             <Key size={14} className="absolute left-2.5 top-2.5 text-gray-400" />
                         </div>
                     </div>
-                    <div>
-                        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
-                            {settings.provider === 'volcano' ? 'Endpoint ID (接入点 ID)' : 'Model Name (模型名称)'}
-                        </label>
-                         <div className="relative">
+                 )}
+
+                 {/* Base URL - Only for Custom */}
+                 {settings.provider === 'custom' && (
+                    <div className="col-span-1">
+                        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Base URL</label>
+                        <div className="relative">
                             <input 
                                 type="text" 
-                                value={settings.modelName || ''}
-                                onChange={(e) => handleChange('modelName', e.target.value)}
-                                placeholder={settings.provider === 'volcano' ? 'ep-2024...' : 'qwen-plus'}
+                                value={settings.baseUrl || ''}
+                                onChange={(e) => handleChange('baseUrl', e.target.value)}
+                                placeholder="https://api.example.com/v1"
                                 className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-1 focus:ring-indigo-500 outline-none pl-8"
                             />
-                            <Server size={14} className="absolute left-2.5 top-2.5 text-gray-400" />
+                            <Link size={14} className="absolute left-2.5 top-2.5 text-gray-400" />
                         </div>
-                        {settings.provider === 'volcano' && <p className="text-[10px] text-gray-400 mt-1">Found in Volcano Console: "Endpoint ID"</p>}
                     </div>
+                 )}
+
+                 {/* Model Name - Visible for all, but with different placeholders */}
+                 <div className={settings.provider === 'gemini' ? "col-span-2" : "col-span-2 md:col-span-1"}>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                        {settings.provider === 'volcano' ? 'Endpoint ID (接入点 ID)' : 'Model Name (模型名称)'}
+                    </label>
+                     <div className="relative">
+                        <input 
+                            type="text" 
+                            value={settings.modelName || ''}
+                            onChange={(e) => handleChange('modelName', e.target.value)}
+                            placeholder={
+                                settings.provider === 'gemini' ? 'Default: gemini-3-flash/pro' :
+                                settings.provider === 'alibaba' ? 'qwen-plus' :
+                                settings.provider === 'volcano' ? 'ep-2024...' :
+                                'gpt-4o'
+                            }
+                            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-1 focus:ring-indigo-500 outline-none pl-8"
+                        />
+                        <Server size={14} className="absolute left-2.5 top-2.5 text-gray-400" />
+                    </div>
+                    {settings.provider === 'volcano' && <p className="text-[10px] text-gray-400 mt-1">Volcano Console: "Endpoint ID"</p>}
+                    {settings.provider === 'gemini' && <p className="text-[10px] text-gray-400 mt-1">Leave empty to use recommended models (Flash for outline, Pro for writing).</p>}
                 </div>
-             )}
+             </div>
         </div>
 
 

@@ -10,7 +10,7 @@ export enum Genre {
 
 export type Language = 'zh' | 'en';
 
-export type ModelProvider = 'gemini' | 'alibaba' | 'volcano';
+export type ModelProvider = 'gemini' | 'alibaba' | 'volcano' | 'custom';
 
 export type WritingTone = 'Neutral' | 'Dark' | 'Humorous' | 'Melancholic' | 'Fast-paced' | 'Romantic' | 'Cynical';
 export type WritingStyle = 'Simple' | 'Moderate' | 'Complex' | 'Poetic';
@@ -25,6 +25,7 @@ export interface NovelSettings {
   language: Language;
   // Model Configuration
   provider: ModelProvider;
+  baseUrl?: string; // For custom providers
   apiKey?: string; // Optional for Gemini (uses env), required for others
   modelName?: string; // e.g., 'qwen-plus', 'ep-2024...'
   
