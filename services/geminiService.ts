@@ -17,8 +17,10 @@ async function withRetry<T>(operation: () => Promise<T>, retries = 3, baseDelay 
             const msg = error?.message || JSON.stringify(error);
             const isRateLimit = msg.includes('429') || msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED');
             const isServer = msg.includes('500') || msg.includes('503') || msg.includes('Overloaded');
+            // 'Failed to fetch' is usually a network error (or CORS)
+            const isNetwork = msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('fetch failed');
             
-            if ((isRateLimit || isServer) && i < retries - 1) {
+            if ((isRateLimit || isServer || isNetwork) && i < retries - 1) {
                 const delay = baseDelay * Math.pow(2, i); // 2s, 4s, 8s
                 console.warn(`API Error (${msg}). Retrying in ${delay}ms...`);
                 await wait(delay);
@@ -28,6 +30,83 @@ async function withRetry<T>(operation: () => Promise<T>, retries = 3, baseDelay 
         }
     }
     throw lastError;
+}
+
+function cleanAndParseJson(text: string) {
+    if (!text) return [];
+    
+    // 1. Remove markdown code blocks first
+    let clean = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+    
+    // Helper to attempt parse
+    const tryParse = (str: string) => {
+        try {
+            return JSON.parse(str);
+        } catch (e) {
+            return null;
+        }
+    };
+
+    // 2. Try parsing directly
+    let result = tryParse(clean);
+    if (result) return result;
+
+    // 3. Try fixing unquoted values (Common error with Chinese text in LLMs)
+    // Pattern: "key": value (where value is missing quotes)
+    const fixUnquoted = (str: string) => {
+        // Look for "key": value where value doesn't start with quote, brace, bracket, or number/bool keywords
+        // We look for specific keys to avoid false positives and only matching until the next comma or closing brace
+        const keys = ['summary', 'title', 'description', 'relationships', 'name', 'role', 'content', 'id'];
+        let fixed = str;
+        
+        keys.forEach(key => {
+             if (key === 'id') return; // id is usually a number, skip
+             // Regex explanation:
+             // "key"\s*:\s*  -> matches "key": 
+             // (?![{\["\d]|true|false|null) -> Negative lookahead: verify next char is NOT {, [, ", digit, or true/false/null
+             // ([^,}\]]+) -> Capture everything until a comma, closing brace, or closing bracket
+             const regex = new RegExp(`"${key}"\\s*:\\s*(?![{\\["\\d]|true|false|null)([^,}\\]]+)`, 'g');
+             
+             fixed = fixed.replace(regex, (match, val) => {
+                const trimmed = val.trim();
+                // Double check it's not a number (sometimes models output numbers as strings without quotes is fine, but we need strings)
+                if (!isNaN(Number(trimmed))) return match; 
+                return `"${key}": "${trimmed.replace(/"/g, '\\"')}"`;
+             });
+        });
+        return fixed;
+    };
+    
+    result = tryParse(fixUnquoted(clean));
+    if (result) return result;
+
+    // 4. Extraction Fallback (if surrounded by conversational text)
+    // Extract array
+    const firstBracket = clean.indexOf('[');
+    const lastBracket = clean.lastIndexOf(']');
+    if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
+        const arrayStr = clean.substring(firstBracket, lastBracket + 1);
+        result = tryParse(arrayStr);
+        if (result) return result;
+        // Try fixing the array string
+        result = tryParse(fixUnquoted(arrayStr));
+        if (result) return result;
+    }
+    
+    // Extract object
+    const firstCurly = clean.indexOf('{');
+    const lastCurly = clean.lastIndexOf('}');
+    if (firstCurly !== -1 && lastCurly !== -1 && lastCurly > firstCurly) {
+        const objStr = clean.substring(firstCurly, lastCurly + 1);
+        result = tryParse(objStr);
+        if (result) return result;
+        // Try fixing
+        result = tryParse(fixUnquoted(objStr));
+        if (result) return result;
+    }
+    
+    console.error("JSON Parse Failed. Raw:", text);
+    throw new Error(`JSON Parse Error: Could not parse or repair output. Raw: ${text.slice(0, 50)}...`);
 }
 
 // --- OpenAI-Compatible Stream Parser Helper ---
@@ -69,7 +148,13 @@ async function* streamOpenAICompatible(url: string, apiKey: string, model: strin
         }
         break; // Success
       } catch (e: any) {
-          if (i === 2 || (!e.message.includes('429') && !e.message.includes('50'))) throw e;
+          const msg = e.message || '';
+          const isNetwork = msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('fetch failed');
+          const isRateLimit = msg.includes('429');
+          const isServer = msg.includes('50'); // 500, 502, etc
+          
+          if (i === 2 || (!isNetwork && !isRateLimit && !isServer)) throw e;
+          console.warn(`Stream connection failed (${msg}). Retrying...`);
           await wait(2000 * Math.pow(2, i));
       }
   }
@@ -285,13 +370,14 @@ export const generateOutline = async (settings: NovelSettings): Promise<Omit<Cha
       }));
 
       const jsonText = response.text || "[]";
-      return JSON.parse(jsonText);
+      return cleanAndParseJson(jsonText);
   }
 
   // External Providers (Prompt Engineering for JSON)
   const jsonPrompt = `${promptText}
   
-  IMPORTANT: Return valid JSON ONLY. No markdown formatting. No \`\`\`json block.
+  IMPORTANT: Return valid JSON ONLY. No markdown formatting. No \`\`\`json block. 
+  CRITICAL: You MUST enclose all keys and string values in DOUBLE QUOTES. Example: "title": "Chapter 1".
   Format: [{"id": 1, "title": "...", "summary": "..."}, ...]`;
 
   const url = getBaseUrl(settings);
@@ -302,12 +388,7 @@ export const generateOutline = async (settings: NovelSettings): Promise<Omit<Cha
 
   const text = await fetchOpenAICompatible(url, apiKey, model, [{role: 'user', content: jsonPrompt}], systemInstruction);
   
-  // Clean up potential markdown formatting if model disobeys
-  let cleanText = text.trim();
-  if (cleanText.startsWith('```json')) cleanText = cleanText.replace('```json', '').replace('```', '');
-  if (cleanText.startsWith('```')) cleanText = cleanText.replace('```', '').replace('```', '');
-  
-  return JSON.parse(cleanText);
+  return cleanAndParseJson(text);
 };
 
 /**
@@ -360,13 +441,14 @@ export const generateCharacters = async (settings: NovelSettings): Promise<Chara
       }));
 
       const jsonText = response.text || "[]";
-      return JSON.parse(jsonText);
+      return cleanAndParseJson(jsonText);
   }
 
   // External Providers
   const jsonPrompt = `${promptText}
   
   IMPORTANT: Return valid JSON ONLY. No markdown formatting.
+  CRITICAL: You MUST enclose all keys and string values in DOUBLE QUOTES. Example: "name": "John".
   Format: [{"name": "...", "role": "...", "description": "...", "relationships": "..."}, ...]`;
 
   const url = getBaseUrl(settings);
@@ -377,11 +459,7 @@ export const generateCharacters = async (settings: NovelSettings): Promise<Chara
 
   const text = await fetchOpenAICompatible(url, apiKey, model, [{role: 'user', content: jsonPrompt}], systemInstruction);
   
-  let cleanText = text.trim();
-  if (cleanText.startsWith('```json')) cleanText = cleanText.replace('```json', '').replace('```', '');
-  if (cleanText.startsWith('```')) cleanText = cleanText.replace('```', '').replace('```', '');
-  
-  return JSON.parse(cleanText);
+  return cleanAndParseJson(text);
 };
 
 /**
