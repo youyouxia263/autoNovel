@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
-import { NovelSettings, Chapter, ModelProvider, Character, GrammarIssue } from "../types";
+import { NovelSettings, Chapter, ModelProvider, Character, GrammarIssue, Genre } from "../types";
 
 const GEMINI_API_KEY = process.env.API_KEY || '';
 
@@ -217,44 +217,103 @@ async function fetchOpenAICompatible(url: string, apiKey: string, model: string,
     });
 }
 
+// --- Genre Specific Instructions ---
+const getGenreSpecificInstructions = (genre: Genre) => {
+    switch (genre) {
+        case Genre.TimeTravel:
+            return `
+GENRE GUIDE - TIME TRAVEL (穿越):
+- **Core Trope**: A protagonist from modern times (or a different future) is transported to a historical or alternate world setting.
+- **Key Elements**: Highlight the contrast between the protagonist's modern knowledge/values and the archaic setting. Use "culture shock" for humor or dramatic conflict.
+- **Narrative Focus**: The protagonist often uses future knowledge (technology, history, poetry, science) to gain an advantage, build a business, or alter a tragic timeline (the "butterfly effect").`;
+        
+        case Genre.Rebirth:
+            return `
+GENRE GUIDE - REBIRTH (重生):
+- **Core Trope**: The protagonist died in a previous life (often tragically or with great regret) and wakes up in their younger body at a pivotal moment in the past.
+- **Key Elements**: "Foreknowledge" is their superpower. They know who the traitors are, what disasters will happen, and where opportunities lie.
+- **Narrative Focus**: Emphasize the emotional weight of past regrets. The story is about "Second Chances", revenge against those who wronged them, and protecting loved ones who died in the original timeline.`;
+        
+        case Genre.Wuxia:
+            return `
+GENRE GUIDE - WUXIA/XIANXIA (武侠/仙侠):
+- **Core Trope**: Cultivation of Qi, martial arts sects, seeking immortality, and navigating the Jianghu.
+- **Key Elements**: Realms of power, spirit artifacts, alchemy, sect politics, and chivalry.`;
+        
+        case Genre.Urban:
+            return `
+GENRE GUIDE - URBAN (都市):
+- **Core Trope**: Stories set in modern cities, often focusing on career success, hidden powers in plain sight, or returning elites.
+- **Key Elements**: Business empires, social status dynamics, modern romance, and "Face-Slapping" (proving doubters wrong).`;
+        
+        case Genre.Suspense:
+        case Genre.Thriller:
+        case Genre.Mystery:
+            return `
+GENRE GUIDE - SUSPENSE/MYSTERY:
+- **Core Trope**: High stakes, hidden truths, and danger lurking in the shadows.
+- **Key Elements**: Unreliable narration, cliffhangers, red herrings, and psychological pressure.`;
+        
+        default:
+            return "";
+    }
+};
+
 // --- Style Instruction Generator ---
 const getStyleInstructions = (settings: NovelSettings) => {
-    let instructions = "";
-
-    // Complexity Rules
-    switch (settings.writingStyle) {
-        case 'Simple':
-            instructions += "\n- **Complexity**: Low (CEFR B2). Use simple, everyday vocabulary. Keep sentences short and direct. Avoid convoluted clauses. Focus on action over description.";
-            break;
-        case 'Complex':
-            instructions += "\n- **Complexity**: High. Use sophisticated, precise, and academic vocabulary. Use varied sentence structures, including compound-complex sentences. Deeply explore psychological states.";
-            break;
-        case 'Poetic':
-            instructions += "\n- **Complexity**: Artistic. Prioritize lyrical rhythm, sensory imagery, and atmosphere. Use metaphors and similes generously. The prose should feel like a painting.";
-            break;
-        case 'Moderate':
-        default:
-            instructions += "\n- **Complexity**: Moderate. Standard literary fiction. Balance simple and compound sentences. Mix action with introspection.";
-            break;
+    const { writingStyle, narrativePerspective, writingTone } = settings;
+    let instructions = `\n### VISUAL & NARRATIVE STYLE CONFIGURATION\n`;
+  
+    // 1. Complexity & Diction
+    instructions += `**Diction & Complexity (${writingStyle}):**\n`;
+    switch (writingStyle) {
+      case 'Simple':
+        instructions += `- **Vocabulary**: Use accessible, high-frequency words. Avoid jargon or archaic terms.\n`;
+        instructions += `- **Sentence Structure**: Predominantly simple and compound sentences. Avoid long, winding sub-clauses.\n`;
+        instructions += `- **Focus**: Concrete actions, direct dialogue, and physical descriptions. Show, don't tell.\n`;
+        break;
+      case 'Complex':
+        instructions += `- **Vocabulary**: Extensive, precise, and occasionally academic or obscure words where fitting.\n`;
+        instructions += `- **Sentence Structure**: Use elaborate hypotactic structures (complex embedding) to mirror complex thoughts.\n`;
+        instructions += `- **Focus**: Abstract concepts, nuance, and density of information. Deep psychological introspection.\n`;
+        break;
+      case 'Poetic':
+        instructions += `- **Vocabulary**: Evocative, sensory-rich, and symbolic.\n`;
+        instructions += `- **Sentence Structure**: Focus on cadence, rhythm, and flow. Use fragments for effect.\n`;
+        instructions += `- **Devices**: Heavy use of metaphor, simile, alliteration, and synesthesia. The prose should paint a picture.\n`;
+        break;
+      case 'Moderate':
+      default:
+        instructions += `- **Vocabulary**: Standard commercial fiction quality. Clear but not simplistic.\n`;
+        instructions += `- **Sentence Structure**: Varied. Balance action-oriented brevity with descriptive flow to control pacing.\n`;
+        break;
     }
-
-    // Perspective Rules
-    switch (settings.narrativePerspective) {
-        case 'First Person':
-            instructions += "\n- **Perspective**: First Person ('I'). The narrative must be deeply subjective. Limit knowledge ONLY to what the narrator perceives or feels. Do not describe things they cannot see.";
-            break;
-        case 'Third Person Omniscient':
-            instructions += "\n- **Perspective**: Third Person Omniscient. The narrator knows all. You may dip into the thoughts of multiple characters within a scene and provide context unknown to the characters.";
-            break;
-        case 'Third Person Limited':
-        default:
-            instructions += "\n- **Perspective**: Third Person Limited. Write from the 'He/She' perspective but bound STRICTLY to the protagonist's internal experience. Do not 'head-hop' to other characters' thoughts.";
-            break;
+  
+    // 2. Perspective (Critical)
+    instructions += `\n**Point of View (${narrativePerspective}):**\n`;
+    switch (narrativePerspective) {
+      case 'First Person':
+        instructions += `- **Mode**: "I/Me/My". Immediate and subjective.\n`;
+        instructions += `- **Filter**: Describe the world *only* through the narrator's senses and biases. You CANNOT describe things happening behind their back.\n`;
+        instructions += `- **Interiority**: High. The narration is the character's direct thought process.\n`;
+        break;
+      case 'Third Person Omniscient':
+        instructions += `- **Mode**: "He/She/They".\n`;
+        instructions += `- **Scope**: God-like. You can access thoughts of *any* character in the scene and provide dramatic irony or context unknown to the characters.\n`;
+        instructions += `- **Voice**: A distinct storyteller voice separate from the characters.\n`;
+        break;
+      case 'Third Person Limited':
+      default:
+        instructions += `- **Mode**: "He/She/They".\n`;
+        instructions += `- **Scope**: Strictly bound to the PROTAGONIST's mind. You cannot know what others think/feel unless the protagonist guesses it.\n`;
+        instructions += `- **Technique**: Use *Free Indirect Discourse*. Blend the narration with the character's internal voice without constant "he thought" tags.\n`;
+        break;
     }
-
-    // Tone Rules
-    instructions += `\n- **Tone**: ${settings.writingTone}.`;
-
+  
+    // 3. Tone
+    instructions += `\n**Atmosphere & Tone (${writingTone}):**\n`;
+    instructions += `- Maintain a **${writingTone}** atmosphere throughout. Adjust word choice and pacing to reflect this tone.\n`;
+  
     return instructions;
 };
 
@@ -276,6 +335,7 @@ export const generatePremise = async (title: string, currentPremise: string, set
   
   const language = settings.language;
   const genre = settings.genre;
+  const genreInstructions = getGenreSpecificInstructions(genre);
 
   const langInstruction = language === 'zh'
     ? "OUTPUT LANGUAGE: Chinese (Simplified)."
@@ -288,6 +348,9 @@ export const generatePremise = async (title: string, currentPremise: string, set
   const promptText = `
     Task: ${task}
     ${langInstruction}
+    
+    ${genreInstructions}
+
     Requirements:
     - Include the main conflict, protagonist, and stakes.
     - Make it intriguing and suitable for the back cover of a book.
@@ -371,21 +434,34 @@ export const generateOutline = async (settings: NovelSettings): Promise<Omit<Cha
   const languageInstruction = settings.language === 'zh' 
     ? "OUTPUT LANGUAGE: Chinese (Simplified). Ensure all titles and summaries are in Chinese." 
     : "OUTPUT LANGUAGE: English.";
+  
+  const genreInstructions = getGenreSpecificInstructions(settings.genre);
+  
+  const isOneShot = settings.novelType === 'short' || settings.chapterCount === 1;
 
-  const formatInstruction = settings.novelType === 'short'
-    ? `Format: Short Story (${settings.targetWordCount} words). Structure the outline to have a tight pacing, complete character arc, and a definitive conclusion within ${settings.chapterCount} chapters.`
-    : `Format: Long Novel Series. Plan for a sprawling narrative arc.`;
+  const formatInstruction = isOneShot
+    ? `Format: Short Story (${settings.targetWordCount} words). Structure the outline to have a tight pacing, complete character arc, and a definitive conclusion within a SINGLE chapter.`
+    : `Format: Long Novel Series. Plan for a sprawling narrative arc over ${settings.chapterCount} chapters.`;
+
+  const structureInstruction = isOneShot
+    ? `IMPORTANT: The user requested a SINGLE CHAPTER short story (One-shot).
+       - You MUST generate exactly ONE chapter with ID 1.
+       - The summary for this chapter must encompass the ENTIRE plot from introduction to conclusion.
+       - Do NOT create multiple chapters.`
+    : `The user requested *at least* ${settings.chapterCount} chapters. 
+       You may generate more chapters if necessary to ensure the story has a complete, well-paced narrative arc.
+       The final chapter MUST conclude the story (unless it's a long series, but usually short stories must end).`;
 
   const promptText = `
     Create a detailed chapter outline for a ${settings.genre} novel titled "${settings.title}".
     ${languageInstruction}
     Premise: ${settings.premise}.
     ${formatInstruction}
+
+    ${genreInstructions}
     
     IMPORTANT - STRUCTURE:
-    The user requested *at least* ${settings.chapterCount} chapters. 
-    You may generate more chapters if necessary to ensure the story has a complete, well-paced narrative arc.
-    The final chapter MUST conclude the story (unless it's a long series, but usually short stories must end).
+    ${structureInstruction}
     
     For each chapter, provide a creative title and a 2-3 sentence summary of the plot points that happen in that chapter.
     Ensure the plot flows logically and maintains the tone of a ${settings.genre} novel.
@@ -448,11 +524,15 @@ export const generateCharacters = async (settings: NovelSettings): Promise<Chara
   const languageInstruction = settings.language === 'zh'
     ? "OUTPUT LANGUAGE: Chinese (Simplified)."
     : "OUTPUT LANGUAGE: English.";
+  
+  const genreInstructions = getGenreSpecificInstructions(settings.genre);
 
   const promptText = `
     Create a list of 3-6 main characters for a ${settings.genre} novel titled "${settings.title}".
     Premise: ${settings.premise}
     ${languageInstruction}
+
+    ${genreInstructions}
     
     For each character provide:
     - Name
@@ -762,20 +842,30 @@ export const generateChapterStream = async function* (
     : "IMPORTANT: Write the story content in English.";
 
   const styleInstructions = getStyleInstructions(settings);
+  const genreInstructions = getGenreSpecificInstructions(settings.genre);
+  
+  // Logic to determine if this is a one-shot (single chapter story)
+  const isOneShot = settings.novelType === 'short' || settings.chapterCount === 1;
+
+  let taskDescription = `Write Chapter ${chapter.id}: "${chapter.title}" for the ${settings.genre} novel "${settings.title}".`;
+  if (isOneShot) {
+      taskDescription = `Write the COMPLETE short story "${settings.title}" (Genre: ${settings.genre}). Chapter Title: "${chapter.title}".`;
+  }
 
   const promptText = `
-    Write Chapter ${chapter.id}: "${chapter.title}" for the ${settings.genre} novel "${settings.title}".
+    ${taskDescription}
     
     ${languageInstruction}
 
-    Chapter Summary: ${chapter.summary}
+    Chapter/Story Summary: ${chapter.summary}
     
     Overall Premise: ${settings.premise}
     
-    Context from previous chapters: ${previousContext.slice(-2000)} ${previousContext.length > 2000 ? "(...truncated)" : ""}
-
-    IMPORTANT - STYLE GUIDELINES:
+    ${previousContext ? `Context from previous chapters: ${previousContext.slice(-2000)} ${previousContext.length > 2000 ? "(...truncated)" : ""}` : ""}
+    
     ${styleInstructions}
+    
+    ${genreInstructions}
 
     GENERAL RULES:
     - **Personal Style**: Adopt a distinct, immersive narrative voice. Avoid robotic or neutral "assistant" tones.
@@ -783,6 +873,7 @@ export const generateChapterStream = async function* (
     - **Pacing**: Vary sentence length significantly to match the scene's tension.
     - **Avoid Clichés**: Do not use common AI tropes like "shivers ran down spine", "a testament to".
     - **No Moralizing**: Do not force a summary or lesson at the end.
+    ${isOneShot ? "- **Structure**: This is a standalone short story. The content must form a complete narrative arc with a clear beginning, middle, and definitive ending within this text." : ""}
     
     Length: Aim for approximately ${Math.round(settings.targetWordCount / settings.chapterCount)} words.
     Output only the story content. Do not include the title or summary again.
@@ -839,6 +930,7 @@ export const continueWriting = async function* (
 ) {
   const langInstruction = settings.language === 'zh' ? "Output in Chinese (Simplified)." : "Output in English.";
   const styleInstructions = getStyleInstructions(settings);
+  const genreInstructions = getGenreSpecificInstructions(settings.genre);
 
   const promptText = `
     Task: Continue writing the following story segment. 
@@ -846,8 +938,9 @@ export const continueWriting = async function* (
     Genre: ${settings.genre}.
     ${langInstruction}
     
-    STYLE CONFIGURATION:
     ${styleInstructions}
+
+    ${genreInstructions}
     
     Current Text (End of chapter so far):
     ${currentContent.slice(-4000)}

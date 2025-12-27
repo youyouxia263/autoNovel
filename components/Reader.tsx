@@ -283,6 +283,20 @@ const Reader: React.FC<ReaderProps> = ({
                     >
                         <SpellCheck size={16} />
                     </button>
+
+                    <button 
+                        onClick={() => {
+                            handleStartEdit();
+                            handleAiContinue();
+                        }}
+                        disabled={isAiWriting}
+                        className="ml-2 flex items-center space-x-1 bg-purple-50 text-purple-700 border border-purple-200 px-3 py-1.5 rounded-md text-xs font-medium hover:bg-purple-100 transition-colors shadow-sm"
+                        title="AI 续写 (Continue Writing)"
+                    >
+                        <Sparkles size={14} />
+                        <span className="hidden sm:inline">AI 续写</span>
+                    </button>
+
                     <button 
                         onClick={handleStartEdit}
                         className="ml-2 flex items-center space-x-1 bg-indigo-600 text-white px-3 py-1.5 rounded-md text-xs font-medium hover:bg-indigo-700 transition-colors shadow-sm"

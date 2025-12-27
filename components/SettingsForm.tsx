@@ -35,8 +35,8 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
         onSettingsChange({
             ...settings,
             novelType: 'short',
-            targetWordCount: 15000, // Default for short story
-            chapterCount: 8
+            targetWordCount: 5000, // Reasonable length for a one-shot
+            chapterCount: 1 // Single chapter for short stories
         });
     } else {
         onSettingsChange({
@@ -195,8 +195,8 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
                 >
                     <ScrollText size={18} />
                     <div className="text-left">
-                        <div className="text-sm font-bold">短篇故事 (Short Story)</div>
-                        <div className="text-[10px] opacity-70">6k - 30k Words</div>
+                        <div className="text-sm font-bold">短篇故事 (One-shot)</div>
+                        <div className="text-[10px] opacity-70">Single Chapter</div>
                     </div>
                 </button>
             </div>
@@ -336,10 +336,11 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
               max={100}
               value={settings.chapterCount}
               onChange={(e) => handleChange('chapterCount', parseInt(e.target.value))}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+              disabled={settings.novelType === 'short'}
+              className={`w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none ${settings.novelType === 'short' ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : ''}`}
              />
              <p className="text-[10px] text-gray-500 mt-1">
-                {settings.novelType === 'short' ? 'Suggested: 3 - 10 chapters' : 'Suggested: 20+ chapters'}
+                {settings.novelType === 'short' ? 'Single Chapter (One-shot)' : 'Suggested: 20+ chapters'}
              </p>
           </div>
           
@@ -356,7 +357,7 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
                <span className="absolute right-4 top-2 text-gray-400 text-sm">字</span>
              </div>
              <p className="text-[10px] text-gray-500 mt-1">
-                {settings.novelType === 'short' ? 'Range: 6,000 - 30,000 words' : 'Unlimited'}
+                {settings.novelType === 'short' ? 'Range: 3,000 - 10,000 words' : 'Unlimited'}
              </p>
           </div>
         </div>
