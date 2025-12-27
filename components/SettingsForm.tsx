@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { NovelSettings, Genre, Language, ModelProvider, WritingTone, WritingStyle, NarrativePerspective } from '../types';
-import { BookOpen, PenTool, Sparkles, Globe, Wand2, Loader2, Bot, Key, Server, Feather, Eye, Mic2, Link } from 'lucide-react';
+import { NovelSettings, Genre, Language, ModelProvider, WritingTone, WritingStyle, NarrativePerspective, NovelType } from '../types';
+import { BookOpen, PenTool, Sparkles, Globe, Wand2, Loader2, Bot, Key, Server, Feather, Eye, Mic2, Link, ScrollText, BookCopy } from 'lucide-react';
 import { generatePremise } from '../services/geminiService';
 
 interface SettingsFormProps {
@@ -17,6 +17,10 @@ const GENRE_LABELS: Record<Genre, string> = {
   [Genre.Mystery]: '推理 (Mystery)',
   [Genre.Fantasy]: '玄幻 (Fantasy)',
   [Genre.SciFi]: '科幻 (Sci-Fi)',
+  [Genre.TimeTravel]: '穿越 (Time Travel)',
+  [Genre.Rebirth]: '重生 (Rebirth)',
+  [Genre.Urban]: '都市 (Urban)',
+  [Genre.Wuxia]: '武侠/仙侠 (Wuxia/Xianxia)',
 };
 
 const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange, onSubmit, isLoading }) => {
@@ -24,6 +28,24 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
   
   const handleChange = (field: keyof NovelSettings, value: any) => {
     onSettingsChange({ ...settings, [field]: value });
+  };
+
+  const handleNovelTypeChange = (type: NovelType) => {
+    if (type === 'short') {
+        onSettingsChange({
+            ...settings,
+            novelType: 'short',
+            targetWordCount: 15000, // Default for short story
+            chapterCount: 8
+        });
+    } else {
+        onSettingsChange({
+            ...settings,
+            novelType: 'long',
+            targetWordCount: 100000,
+            chapterCount: 20
+        });
+    }
   };
 
   const handleAiGeneratePremise = async () => {
@@ -144,6 +166,41 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
              </div>
         </div>
 
+        {/* Novel Format Selection */}
+        <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">作品篇幅 (Format)</label>
+            <div className="grid grid-cols-2 gap-4">
+                <button
+                    onClick={() => handleNovelTypeChange('long')}
+                    className={`flex items-center justify-center space-x-2 p-3 rounded-lg border transition-all ${
+                        settings.novelType !== 'short'
+                        ? 'bg-indigo-50 border-indigo-500 text-indigo-700 ring-1 ring-indigo-500'
+                        : 'bg-white border-gray-200 text-gray-600 hover:border-indigo-300'
+                    }`}
+                >
+                    <BookCopy size={18} />
+                    <div className="text-left">
+                        <div className="text-sm font-bold">长篇连载 (Series)</div>
+                        <div className="text-[10px] opacity-70">无限字数 / Unlimted</div>
+                    </div>
+                </button>
+
+                <button
+                    onClick={() => handleNovelTypeChange('short')}
+                    className={`flex items-center justify-center space-x-2 p-3 rounded-lg border transition-all ${
+                        settings.novelType === 'short'
+                        ? 'bg-indigo-50 border-indigo-500 text-indigo-700 ring-1 ring-indigo-500'
+                        : 'bg-white border-gray-200 text-gray-600 hover:border-indigo-300'
+                    }`}
+                >
+                    <ScrollText size={18} />
+                    <div className="text-left">
+                        <div className="text-sm font-bold">短篇故事 (Short Story)</div>
+                        <div className="text-[10px] opacity-70">6k - 30k Words</div>
+                    </div>
+                </button>
+            </div>
+        </div>
 
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">小说标题 (Title)</label>
@@ -152,7 +209,7 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
             value={settings.title}
             onChange={(e) => handleChange('title', e.target.value)}
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-colors"
-            placeholder="例如：沉默的回声"
+            placeholder={settings.genre === Genre.TimeTravel ? "例如：回到1990当首富" : "例如：沉默的回声"}
           />
         </div>
 
@@ -275,12 +332,15 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
              <label className="block text-sm font-medium text-gray-700 mb-1">章节数量 (Chapters)</label>
              <input
               type="number"
-              min={3}
-              max={50}
+              min={1}
+              max={100}
               value={settings.chapterCount}
               onChange={(e) => handleChange('chapterCount', parseInt(e.target.value))}
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
              />
+             <p className="text-[10px] text-gray-500 mt-1">
+                {settings.novelType === 'short' ? 'Suggested: 3 - 10 chapters' : 'Suggested: 20+ chapters'}
+             </p>
           </div>
           
           <div>
@@ -295,6 +355,9 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
                />
                <span className="absolute right-4 top-2 text-gray-400 text-sm">字</span>
              </div>
+             <p className="text-[10px] text-gray-500 mt-1">
+                {settings.novelType === 'short' ? 'Range: 6,000 - 30,000 words' : 'Unlimited'}
+             </p>
           </div>
         </div>
 

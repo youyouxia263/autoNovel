@@ -5,10 +5,15 @@ export enum Genre {
   Thriller = 'Thriller',
   Mystery = 'Mystery',
   Fantasy = 'Fantasy',
-  SciFi = 'Sci-Fi'
+  SciFi = 'Sci-Fi',
+  TimeTravel = 'TimeTravel', // 穿越
+  Rebirth = 'Rebirth',       // 重生
+  Urban = 'Urban',           // 都市
+  Wuxia = 'Wuxia'            // 武侠/仙侠
 }
 
 export type Language = 'zh' | 'en';
+export type NovelType = 'long' | 'short';
 
 export type ModelProvider = 'gemini' | 'alibaba' | 'volcano' | 'custom';
 
@@ -20,6 +25,7 @@ export interface NovelSettings {
   title: string;
   premise: string;
   genre: Genre;
+  novelType: NovelType;
   targetWordCount: number;
   chapterCount: number;
   language: Language;
@@ -60,10 +66,17 @@ export interface Chapter {
   consistencyAnalysis?: string; // Result of the consistency check
 }
 
+export interface GrammarIssue {
+  original: string;
+  suggestion: string;
+  explanation: string;
+}
+
 export interface NovelState {
   settings: NovelSettings;
   chapters: Chapter[];
   characters: Character[];
   currentChapterId: number | null;
   status: 'idle' | 'generating_outline' | 'ready';
+  consistencyReport?: string | null;
 }

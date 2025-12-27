@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { AppearanceSettings, Chapter, NovelSettings } from '../types';
-import { Type, AlignLeft, AlignJustify, Moon, Sun, Monitor, ArrowUpDown, Home, ChevronRight, Edit3, Save, X, Sparkles, Loader2, AlertTriangle } from 'lucide-react';
-import { continueWriting } from '../services/geminiService';
+import { AppearanceSettings, Chapter, NovelSettings, GrammarIssue } from '../types';
+import { Type, AlignLeft, AlignJustify, Moon, Sun, Monitor, ArrowUpDown, Home, ChevronRight, Edit3, Save, X, Sparkles, Loader2, AlertTriangle, FileText, BookOpen, Copy, Check, SpellCheck, PenLine } from 'lucide-react';
+import { continueWriting, checkGrammar, autoCorrectGrammar } from '../services/geminiService';
+import GrammarReport from './GrammarReport';
 
 interface ReaderProps {
   chapter: Chapter | undefined;
@@ -25,6 +26,14 @@ const Reader: React.FC<ReaderProps> = ({
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
   const [isAiWriting, setIsAiWriting] = useState(false);
+  const [copySuccess, setCopySuccess] = useState(false);
+  
+  // Grammar Check State
+  const [isCheckingGrammar, setIsCheckingGrammar] = useState(false);
+  const [grammarIssues, setGrammarIssues] = useState<GrammarIssue[]>([]);
+  const [showGrammarReport, setShowGrammarReport] = useState(false);
+  const [isFixingGrammar, setIsFixingGrammar] = useState(false);
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Sync edit content when chapter changes or when entering edit mode
@@ -77,7 +86,75 @@ const Reader: React.FC<ReaderProps> = ({
         alert("AI assistant encountered an error.");
     } finally {
         setIsAiWriting(false);
+        // Focus back on textarea after a short delay
+        setTimeout(() => {
+            if (textareaRef.current) {
+                textareaRef.current.focus();
+                textareaRef.current.scrollTop = textareaRef.current.scrollHeight;
+            }
+        }, 100);
     }
+  };
+
+  const handleCopy = async () => {
+    if (!chapter?.content && !editContent) return;
+    const textToCopy = isEditing ? editContent : chapter?.content || '';
+    
+    try {
+        await navigator.clipboard.writeText(textToCopy);
+        setCopySuccess(true);
+        setTimeout(() => setCopySuccess(false), 2000);
+    } catch (err) {
+        console.error('Failed to copy', err);
+    }
+  };
+
+  const handleGrammarCheck = async () => {
+      const textToCheck = isEditing ? editContent : chapter?.content;
+      if (!textToCheck) return;
+
+      setIsCheckingGrammar(true);
+      try {
+          const issues = await checkGrammar(textToCheck, settings);
+          setGrammarIssues(issues);
+          setShowGrammarReport(true);
+      } catch (e) {
+          console.error("Grammar check failed", e);
+          alert("Grammar check failed. Please check connection.");
+      } finally {
+          setIsCheckingGrammar(false);
+      }
+  };
+
+  const handleAutoFixGrammar = async () => {
+      const textToFix = isEditing ? editContent : chapter?.content;
+      if (!chapter || !textToFix) return;
+
+      setIsFixingGrammar(true);
+      try {
+          const fixed = await autoCorrectGrammar(textToFix, settings);
+          if (isEditing) {
+              setEditContent(fixed);
+          } else {
+              onUpdateContent(chapter.id, fixed);
+          }
+          setShowGrammarReport(false);
+      } catch (e) {
+          console.error("Auto fix failed", e);
+          alert("Auto-fix failed.");
+      } finally {
+          setIsFixingGrammar(false);
+      }
+  };
+
+  const getWordCount = (text: string) => {
+    if (!text) return 0;
+    // Heuristic: for mostly Chinese content, count characters. For English, count words.
+    const nonAscii = (text.match(/[^\x00-\x7F]/g) || []).length;
+    if (nonAscii > text.length * 0.5) {
+        return text.replace(/\s/g, '').length;
+    }
+    return text.trim().split(/\s+/).filter(w => w.length > 0).length;
   };
 
   const getThemeClasses = () => {
@@ -106,6 +183,8 @@ const Reader: React.FC<ReaderProps> = ({
       </div>
     );
   }
+
+  const wordCount = getWordCount(isEditing ? editContent : chapter.content);
 
   return (
     <div className={`flex-1 flex flex-col h-full overflow-hidden transition-colors duration-300 ${getContainerThemeClasses()}`}>
@@ -187,6 +266,23 @@ const Reader: React.FC<ReaderProps> = ({
                 </div>
 
                 {chapter.content && !chapter.isGenerating && (
+                    <>
+                    <div className="h-4 w-px bg-current opacity-20 mx-2"></div>
+                    <button
+                        onClick={handleCopy}
+                        className="p-1.5 rounded-md hover:bg-black/5 text-gray-500 hover:text-indigo-600 transition-colors"
+                        title="Copy to Clipboard"
+                    >
+                        {copySuccess ? <Check size={16} className="text-green-600" /> : <Copy size={16} />}
+                    </button>
+                     <button
+                        onClick={handleGrammarCheck}
+                        disabled={isCheckingGrammar}
+                        className={`p-1.5 rounded-md hover:bg-black/5 transition-colors ${isCheckingGrammar ? 'text-indigo-400 animate-pulse' : 'text-gray-500 hover:text-indigo-600'}`}
+                        title="Check Grammar"
+                    >
+                        <SpellCheck size={16} />
+                    </button>
                     <button 
                         onClick={handleStartEdit}
                         className="ml-2 flex items-center space-x-1 bg-indigo-600 text-white px-3 py-1.5 rounded-md text-xs font-medium hover:bg-indigo-700 transition-colors shadow-sm"
@@ -194,6 +290,7 @@ const Reader: React.FC<ReaderProps> = ({
                         <Edit3 size={14} />
                         <span>编辑</span>
                     </button>
+                    </>
                 )}
                 </>
             ) : (
@@ -232,10 +329,20 @@ const Reader: React.FC<ReaderProps> = ({
       <div className="flex-1 overflow-y-auto relative scroll-smooth">
         <div className={`min-h-full max-w-3xl mx-auto py-12 px-8 md:px-12 shadow-sm transition-colors duration-300 ${getThemeClasses()}`}>
             
-            <h1 className={`text-3xl md:text-4xl font-bold mb-2 ${appearance.fontFamily === 'font-sans' ? 'tracking-tight' : ''}`}>
-              {chapter.title}
-            </h1>
-            <div className="h-1 w-20 bg-indigo-500 mb-8 rounded-full"></div>
+            <div className="mb-6">
+                <h1 className={`text-3xl md:text-4xl font-bold mb-2 ${appearance.fontFamily === 'font-sans' ? 'tracking-tight' : ''}`}>
+                {chapter.title}
+                </h1>
+                <div className="flex items-center space-x-4">
+                    <div className="h-1 w-20 bg-indigo-500 rounded-full"></div>
+                    {wordCount > 0 && (
+                        <div className="flex items-center text-xs opacity-50 space-x-1">
+                            <FileText size={12} />
+                            <span>{wordCount} 字 (Words)</span>
+                        </div>
+                    )}
+                </div>
+            </div>
 
             {/* Consistency Warning */}
             {chapter.consistencyAnalysis && chapter.consistencyAnalysis !== "Consistent" && (
@@ -252,17 +359,52 @@ const Reader: React.FC<ReaderProps> = ({
                 </div>
             )}
 
+            {/* Chapter Outline/Summary Display - Shows only when content exists or in edit mode */}
+            {chapter.summary && (chapter.content || isEditing) && (
+               <div className={`mb-10 p-6 rounded-xl border transition-colors ${
+                   appearance.theme === 'dark' ? 'bg-white/5 border-white/10 text-gray-400' : 
+                   appearance.theme === 'sepia' ? 'bg-[#e6dcc8] border-[#d3c4b1] text-[#5b4636]' : 
+                   'bg-gray-50 border-gray-100 text-gray-600'
+               }`}>
+                   <div className="flex items-center space-x-2 mb-3 opacity-70">
+                       <BookOpen size={14} className="opacity-70" />
+                       <span className="text-xs font-bold uppercase tracking-widest">本章大纲 (Outline)</span>
+                       <div className="h-px flex-1 bg-current opacity-20"></div>
+                   </div>
+                   <p className="text-sm leading-relaxed font-serif italic opacity-90">
+                       {chapter.summary}
+                   </p>
+               </div>
+            )}
+
             {isEditing ? (
-                 <div className="w-full h-[60vh] md:h-[70vh]">
+                 <div className="w-full h-[60vh] md:h-[70vh] relative group">
                     <textarea 
                         ref={textareaRef}
                         value={editContent}
                         onChange={(e) => setEditContent(e.target.value)}
+                        readOnly={isAiWriting}
                         className={`w-full h-full p-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-none bg-transparent ${
                             appearance.theme === 'dark' ? 'text-gray-300 border-gray-700' : 'text-gray-800'
-                        } font-mono text-base leading-relaxed`}
+                        } font-mono text-base leading-relaxed transition-opacity ${isAiWriting ? 'opacity-75 cursor-wait' : ''}`}
                         placeholder="Start typing or use AI to generate..."
                     />
+                    
+                    {/* Visual Feedback Overlay */}
+                    {isAiWriting && (
+                        <div className="absolute bottom-8 right-8 flex items-center space-x-3 bg-white/95 border border-indigo-100 text-indigo-700 px-5 py-3 rounded-xl shadow-xl backdrop-blur-sm animate-in fade-in slide-in-from-bottom-4 duration-300 z-10">
+                             <div className="flex space-x-1.5 items-center">
+                                <div className="w-2 h-2 bg-indigo-500 rounded-full animate-[bounce_1s_infinite_0ms]"></div>
+                                <div className="w-2 h-2 bg-indigo-500 rounded-full animate-[bounce_1s_infinite_200ms]"></div>
+                                <div className="w-2 h-2 bg-indigo-500 rounded-full animate-[bounce_1s_infinite_400ms]"></div>
+                             </div>
+                             <div className="flex flex-col">
+                                <span className="text-sm font-bold">AI 正在创作中...</span>
+                                <span className="text-[10px] text-gray-500 font-medium">Writing & Thinking</span>
+                             </div>
+                             <PenLine size={16} className="text-indigo-400 animate-pulse ml-1" />
+                        </div>
+                    )}
                  </div>
             ) : chapter.content ? (
               <div className={`
@@ -306,6 +448,15 @@ const Reader: React.FC<ReaderProps> = ({
             <div className="h-20"></div>
         </div>
       </div>
+      
+      {/* Grammar Modal */}
+      <GrammarReport 
+        isOpen={showGrammarReport}
+        onClose={() => setShowGrammarReport(false)}
+        issues={grammarIssues}
+        onAutoFix={handleAutoFixGrammar}
+        isFixing={isFixingGrammar}
+      />
     </div>
   );
 };

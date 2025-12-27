@@ -4,6 +4,7 @@ import * as GeminiService from './services/geminiService';
 import SettingsForm from './components/SettingsForm';
 import Reader from './components/Reader';
 import CharacterList from './components/CharacterList';
+import ConsistencyReport from './components/ConsistencyReport';
 import { Layout, Menu, ChevronRight, CheckCircle2, Circle, Save, Download, FileText, Printer, RefreshCw, Sparkles, Users, FileSearch } from 'lucide-react';
 
 // Initial default settings
@@ -11,6 +12,7 @@ const DEFAULT_SETTINGS: NovelSettings = {
   title: '',
   premise: '',
   genre: Genre.Suspense, // Default requirement
+  novelType: 'long',
   targetWordCount: 10000, // Updated default requirement
   chapterCount: 5,
   language: 'zh', // Default to Chinese
@@ -31,6 +33,17 @@ const DEFAULT_APPEARANCE: AppearanceSettings = {
   theme: 'light',
 };
 
+// Helper for word count
+const getWordCount = (text: string) => {
+    if (!text) return 0;
+    // Heuristic: if > 50% non-ascii, count chars, else count words
+    const nonAscii = (text.match(/[^\x00-\x7F]/g) || []).length;
+    if (nonAscii > text.length * 0.5) {
+        return text.replace(/\s/g, '').length;
+    }
+    return text.trim().split(/\s+/).filter(w => w.length > 0).length;
+};
+
 const App: React.FC = () => {
   // --- State ---
   const [state, setState] = useState<NovelState>({
@@ -39,16 +52,18 @@ const App: React.FC = () => {
     characters: [],
     currentChapterId: null,
     status: 'idle',
+    consistencyReport: null
   });
 
   const [appearance, setAppearance] = useState<AppearanceSettings>(DEFAULT_APPEARANCE);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [showCharacterModal, setShowCharacterModal] = useState(false);
+  const [showConsistencyReport, setShowConsistencyReport] = useState(false);
   const [isCheckingConsistency, setIsCheckingConsistency] = useState(false);
 
-  // Refs for tracking generation context
-  const abortControllerRef = useRef<AbortController | null>(null);
+  // Calculate stats
+  const totalWordCount = state.chapters.reduce((acc, c) => acc + getWordCount(c.content || ''), 0);
 
   // --- Handlers ---
 
@@ -232,8 +247,7 @@ const App: React.FC = () => {
             continue;
         }
 
-        // Add a delay between chapters to avoid rate limits (2 seconds)
-        // This is a simple backoff measure at the application level.
+        // Add a delay between chapters to avoid rate limits (3 seconds)
         if (i > 0) {
             await new Promise(resolve => setTimeout(resolve, 3000)); 
         }
@@ -282,13 +296,14 @@ const App: React.FC = () => {
 
         } catch (error) {
             console.error("Auto generation failed at chapter " + chapter.id, error);
-            alert(`Error generating Chapter ${chapter.id}. Auto-generation paused due to API error. Please try clicking 'Generate' again in a few moments.`);
+            // Critical: Ensure we turn off generating flag so user can try again
             setState(prev => {
                 const nextChapters = [...prev.chapters];
                 nextChapters[i] = { ...nextChapters[i], isGenerating: false };
                 return { ...prev, chapters: nextChapters };
             });
-            break; // Stop the loop
+            alert(`Auto-generation paused at Chapter ${chapter.id} due to network error. \nPlease click 'Generate' again to resume.`);
+            break; // Stop the loop, allowing user to resume later
         }
     }
   };
@@ -296,11 +311,11 @@ const App: React.FC = () => {
   const handleRewriteAll = async () => {
     if (!window.confirm("确定要重写所有章节吗？这将覆盖现有内容。\nAre you sure you want to rewrite all chapters? This will overwrite existing content.")) return;
     
-    // Create a clean slate based on existing chapters (preserving titles/summaries)
+    // Create a clean slate based on existing chapters
     const chaptersToRewrite = state.chapters.map(c => ({
         ...c, 
         content: '', 
-        summary: c.summary, // Keep original summary as premise or clear it? Better to keep for prompt context.
+        summary: c.summary,
         isDone: false,
         isGenerating: false,
         consistencyAnalysis: undefined
@@ -311,7 +326,7 @@ const App: React.FC = () => {
     
     let cumulativeContext = "";
     
-    // We loop through indices to ensure we update the correct chapter in state
+    // Loop
     for (let i = 0; i < chaptersToRewrite.length; i++) {
         const chapterConfig = chaptersToRewrite[i]; 
         
@@ -337,7 +352,7 @@ const App: React.FC = () => {
                 });
             }
             
-            // Summarize (Optional: re-summarize based on new content to be accurate)
+            // Summarize
             const summary = await GeminiService.summarizeChapter(fullContent, state.settings);
             
             // Mark done
@@ -357,12 +372,12 @@ const App: React.FC = () => {
             
         } catch (e) {
             console.error(e);
-            alert(`Error generating Chapter ${chapterConfig.id}. Process paused.`);
-            setState(prev => {
+             setState(prev => {
                  const nextChapters = [...prev.chapters];
                  nextChapters[i] = { ...nextChapters[i], isGenerating: false };
                  return { ...prev, chapters: nextChapters };
             });
+            alert(`Error generating Chapter ${chapterConfig.id}. Process paused.`);
             break; 
         }
     }
@@ -394,11 +409,49 @@ const App: React.FC = () => {
     }
 
     setIsCheckingConsistency(false);
-    
-    if (issueCount > 0) {
-        alert(`Check complete. Found potential issues in ${issueCount} chapters. Please review the warnings in each chapter.`);
-    } else {
-        alert("Consistency check complete. No obvious contradictions found.");
+    setShowConsistencyReport(true);
+  };
+
+  const handleFixConsistency = async (chapterId: number) => {
+    const chapter = state.chapters.find(c => c.id === chapterId);
+    if (!chapter || !chapter.consistencyAnalysis) return;
+
+    // Set UI to loading/generating for this specific chapter
+    setState(prev => {
+        const nextChapters = prev.chapters.map(c => 
+            c.id === chapterId ? { ...c, isGenerating: true } : c
+        );
+        return { ...prev, chapters: nextChapters };
+    });
+
+    try {
+        const fixedContent = await GeminiService.fixChapterConsistency(
+            chapter.content,
+            state.characters,
+            chapter.consistencyAnalysis,
+            state.settings
+        );
+
+        setState(prev => {
+            const nextChapters = prev.chapters.map(c => 
+                c.id === chapterId ? { 
+                    ...c, 
+                    content: fixedContent, 
+                    isGenerating: false,
+                    consistencyAnalysis: "Fixed (Manual check recommended)" 
+                } : c
+            );
+            return { ...prev, chapters: nextChapters };
+        });
+    } catch (e) {
+        console.error("Failed to fix consistency", e);
+        alert("Auto-fix failed. Please check connection.");
+        setState(prev => {
+            const nextChapters = prev.chapters.map(c => 
+                c.id === chapterId ? { ...c, isGenerating: false } : c
+            );
+            return { ...prev, chapters: nextChapters };
+        });
     }
   };
 
@@ -409,6 +462,7 @@ const App: React.FC = () => {
     lines.push(state.settings.title);
     lines.push("=".repeat(state.settings.title.length * 2));
     lines.push(`\nPremise/Intro:\n${state.settings.premise}\n`);
+    lines.push(`Total Words: ${totalWordCount}`);
     
     state.chapters.forEach(chapter => {
       lines.push("\n\n" + "#".repeat(20));
@@ -459,6 +513,7 @@ const App: React.FC = () => {
             color: #000;
           }
           h1 { text-align: center; margin-bottom: 20px; font-size: 2em; }
+          .meta { text-align: center; color: #666; margin-bottom: 30px; }
           .premise { font-style: italic; margin-bottom: 40px; color: #444; border-left: 3px solid #ddd; padding-left: 15px; }
           .chapter { margin-bottom: 40px; }
           h2 { border-bottom: 1px solid #eee; padding-bottom: 10px; margin-top: 30px; }
@@ -472,6 +527,7 @@ const App: React.FC = () => {
       </head>
       <body>
         <h1>${title}</h1>
+        <div class="meta">Word Count: ${totalWordCount}</div>
         <div class="premise">${state.settings.premise}</div>
         <hr style="margin: 30px 0; border: 0; border-top: 1px solid #ccc;" />
         ${contentHtml}
@@ -526,11 +582,17 @@ const App: React.FC = () => {
           sidebarOpen ? 'w-80 translate-x-0' : 'w-0 -translate-x-full'
         } bg-white border-r border-gray-200 transition-all duration-300 ease-in-out flex flex-col absolute md:relative z-20 h-full shadow-xl md:shadow-none`}
       >
-        <div className="p-4 border-b border-gray-100 flex items-center justify-between bg-gray-50">
-          <h3 className="font-semibold text-gray-700 font-sans">目录 (Table of Contents)</h3>
-          <button onClick={() => setSidebarOpen(false)} className="md:hidden p-1 text-gray-500">
-             <ChevronRight className="rotate-180" />
-          </button>
+        <div className="p-4 border-b border-gray-100 bg-gray-50 flex flex-col space-y-2">
+          <div className="flex items-center justify-between">
+             <h3 className="font-semibold text-gray-700 font-sans">目录 (Table of Contents)</h3>
+             <button onClick={() => setSidebarOpen(false)} className="md:hidden p-1 text-gray-500">
+                <ChevronRight className="rotate-180" />
+             </button>
+          </div>
+          <div className="text-xs text-gray-500 bg-white px-2 py-1 rounded border border-gray-100 flex justify-between">
+             <span>总字数 (Total):</span>
+             <span className="font-mono font-medium">{totalWordCount}</span>
+          </div>
         </div>
         
         <div className="flex-1 overflow-y-auto py-2">
@@ -552,6 +614,11 @@ const App: React.FC = () => {
                   <span className={`text-sm font-medium block truncate w-48 ${state.currentChapterId === chapter.id ? 'text-gray-900' : 'text-gray-700'}`}>
                     {chapter.title}
                   </span>
+                  {chapter.content && (
+                      <span className="text-[10px] text-gray-400 mt-0.5 block">
+                          {getWordCount(chapter.content)} 字
+                      </span>
+                  )}
                 </div>
                 <div className="mt-1 flex items-center space-x-1">
                    {/* Status Indicator */}
@@ -650,11 +717,17 @@ const App: React.FC = () => {
           onUpdateContent={handleUpdateChapter}
         />
         
-        {/* Character Modal */}
+        {/* Modals */}
         <CharacterList 
             characters={state.characters} 
             isOpen={showCharacterModal} 
             onClose={() => setShowCharacterModal(false)} 
+        />
+        <ConsistencyReport 
+            chapters={state.chapters}
+            isOpen={showConsistencyReport}
+            onClose={() => setShowConsistencyReport(false)}
+            onFixConsistency={handleFixConsistency}
         />
       </div>
 
