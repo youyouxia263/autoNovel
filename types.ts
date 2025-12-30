@@ -30,12 +30,14 @@ export interface NovelSettings {
   targetWordCount: number;
   chapterCount: number;
   language: Language;
-  worldSetting?: string; 
+  worldSetting?: string;
+  mainCharacters?: string; // New: User provided initial characters
   // Model Configuration
   provider: ModelProvider;
   baseUrl?: string; 
   apiKey?: string; 
   modelName?: string; 
+  maxOutputTokens?: number; // New: Configurable max tokens
   
   // Style Configuration
   writingTone: WritingTone;
@@ -74,6 +76,11 @@ export interface GrammarIssue {
   explanation: string;
 }
 
+export interface UsageStats {
+  inputTokens: number;
+  outputTokens: number;
+}
+
 export interface NovelState {
   settings: NovelSettings;
   chapters: Chapter[];
@@ -81,4 +88,5 @@ export interface NovelState {
   currentChapterId: number | null;
   status: 'idle' | 'generating_outline' | 'ready';
   consistencyReport?: string | null;
+  usage: UsageStats; // New: Track token usage
 }

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { AppearanceSettings, Chapter, NovelSettings, GrammarIssue } from '../types';
+import { AppearanceSettings, Chapter, NovelSettings, GrammarIssue, Character } from '../types';
 import { Type, AlignLeft, AlignJustify, Moon, Sun, Monitor, ArrowUpDown, Home, ChevronRight, Edit3, Save, X, Sparkles, Loader2, AlertTriangle, FileText, BookOpen, Copy, Check, SpellCheck, PenLine, FileCode } from 'lucide-react';
 import { continueWriting, checkGrammar, autoCorrectGrammar } from '../services/geminiService';
 import GrammarReport from './GrammarReport';
@@ -12,6 +12,7 @@ interface ReaderProps {
   onGenerate: () => void;
   onBack: () => void;
   onUpdateContent: (id: number, content: string) => void;
+  characters?: Character[]; // New prop
 }
 
 const Reader: React.FC<ReaderProps> = ({ 
@@ -21,7 +22,8 @@ const Reader: React.FC<ReaderProps> = ({
   onAppearanceChange, 
   onGenerate, 
   onBack,
-  onUpdateContent
+  onUpdateContent,
+  characters = []
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
@@ -101,7 +103,8 @@ const Reader: React.FC<ReaderProps> = ({
     setStreamingContent(''); 
 
     try {
-        const stream = continueWriting(baseContent, settings, chapter.title);
+        // Pass characters to continueWriting
+        const stream = continueWriting(baseContent, settings, chapter.title, characters);
         let accumulated = '';
         
         for await (const chunk of stream) {
@@ -114,9 +117,9 @@ const Reader: React.FC<ReaderProps> = ({
         setEditContent(finalContent);
         onUpdateContent(chapter.id, finalContent);
 
-    } catch (e) {
+    } catch (e: any) {
         console.error("AI writing failed", e);
-        alert("AI assistant encountered an error.");
+        alert(`AI assistant encountered an error: ${e.message}`);
     } finally {
         setStreamingContent('');
         setIsAiWriting(false);

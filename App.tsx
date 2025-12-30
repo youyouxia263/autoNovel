@@ -1,11 +1,11 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { NovelState, NovelSettings, Genre, AppearanceSettings, Chapter } from './types';
+import { NovelState, NovelSettings, Genre, AppearanceSettings, Chapter, Character } from './types';
 import * as GeminiService from './services/geminiService';
 import SettingsForm from './components/SettingsForm';
 import Reader from './components/Reader';
 import CharacterList from './components/CharacterList';
 import ConsistencyReport from './components/ConsistencyReport';
-import { Layout, Menu, ChevronRight, CheckCircle2, Circle, Save, Download, FileText, Printer, RefreshCw, Sparkles, Users, FileSearch } from 'lucide-react';
+import { Layout, Menu, ChevronRight, CheckCircle2, Circle, Save, Download, FileText, Printer, RefreshCw, Sparkles, Users, FileSearch, BookOpen, Gauge } from 'lucide-react';
 
 // Initial default settings
 const DEFAULT_SETTINGS: NovelSettings = {
@@ -24,6 +24,7 @@ const DEFAULT_SETTINGS: NovelSettings = {
   writingTone: 'Neutral',
   writingStyle: 'Moderate',
   narrativePerspective: 'Third Person Limited',
+  maxOutputTokens: undefined, 
 };
 
 const DEFAULT_APPEARANCE: AppearanceSettings = {
@@ -53,7 +54,8 @@ const App: React.FC = () => {
     characters: [],
     currentChapterId: null,
     status: 'idle',
-    consistencyReport: null
+    consistencyReport: null,
+    usage: { inputTokens: 0, outputTokens: 0 }
   });
 
   // Ref to track latest settings for async operations
@@ -75,6 +77,17 @@ const App: React.FC = () => {
 
   // Calculate stats
   const totalWordCount = state.chapters.reduce((acc, c) => acc + getWordCount(c.content || ''), 0);
+
+  // --- Helpers ---
+  const handleUsageUpdate = (usage: { input: number; output: number }) => {
+    setState(prev => ({
+        ...prev,
+        usage: {
+            inputTokens: prev.usage.inputTokens + usage.input,
+            outputTokens: prev.usage.outputTokens + usage.output
+        }
+    }));
+  };
 
   // --- Handlers ---
 
@@ -105,17 +118,22 @@ const App: React.FC = () => {
       characters: [],
       currentChapterId: null,
       status: 'idle',
+      usage: { inputTokens: 0, outputTokens: 0 }
     });
     setSidebarOpen(true);
   };
 
   const handleUpdateChapter = (chapterId: number, newContent: string) => {
     setState(prev => {
-        const newChapters = prev.chapters.map(c => 
+        const nextChapters = prev.chapters.map(c => 
             c.id === chapterId ? { ...c, content: newContent, isDone: true } : c
         );
-        return { ...prev, chapters: newChapters };
+        return { ...prev, chapters: nextChapters };
     });
+  };
+
+  const handleUpdateCharacters = (newCharacters: Character[]) => {
+      setState(prev => ({ ...prev, characters: newCharacters }));
   };
 
   const generateOutlineAndCharacters = async () => {
@@ -131,8 +149,8 @@ const App: React.FC = () => {
     try {
       // Parallel generation for speed, passing signal
       const [outline, characters] = await Promise.all([
-         GeminiService.generateOutline(settingsRef.current, controller.signal),
-         GeminiService.generateCharacters(settingsRef.current, controller.signal)
+         GeminiService.generateOutline(settingsRef.current, controller.signal, handleUsageUpdate),
+         GeminiService.generateCharacters(settingsRef.current, controller.signal, handleUsageUpdate)
       ]);
       
       const newChapters: Chapter[] = outline.map(c => ({
@@ -156,7 +174,7 @@ const App: React.FC = () => {
           setState(prev => ({ ...prev, status: 'idle' }));
       } else {
           console.error("Generation failed", error);
-          alert("Failed to generate outline or characters. Please check your API key and network connection.");
+          alert(`Failed to generate outline or characters: ${error.message || "Unknown Error"}`);
           setState(prev => ({ ...prev, status: 'idle' }));
       }
     } finally {
@@ -220,7 +238,9 @@ const App: React.FC = () => {
           settingsRef.current, // Use ref
           chapter, 
           storySummaries, 
-          lastChapterEnding
+          lastChapterEnding,
+          state.characters, // Pass characters
+          handleUsageUpdate
       );
       
       let fullContent = '';
@@ -228,16 +248,16 @@ const App: React.FC = () => {
       for await (const chunk of stream) {
         fullContent += chunk;
         setState(prev => {
-          const newChapters = [...prev.chapters];
+          const nextChapters = [...prev.chapters];
           // Determine index again in case state changed elsewhere (unlikely but safe)
-          const idx = newChapters.findIndex(c => c.id === chapterId);
+          const idx = nextChapters.findIndex(c => c.id === chapterId);
           if (idx !== -1) {
-            newChapters[idx] = { 
-              ...newChapters[idx], 
+            nextChapters[idx] = { 
+              ...nextChapters[idx], 
               content: fullContent 
             };
           }
-          return { ...prev, chapters: newChapters };
+          return { ...prev, chapters: nextChapters };
         });
       }
 
@@ -246,7 +266,8 @@ const App: React.FC = () => {
       try {
         const generatedSummary = await GeminiService.summarizeChapter(
           fullContent, 
-          settingsRef.current // Use ref
+          settingsRef.current, // Use ref
+          handleUsageUpdate
         );
         if (generatedSummary) {
           finalSummary = generatedSummary;
@@ -271,9 +292,9 @@ const App: React.FC = () => {
         return { ...prev, chapters: newChapters };
       });
 
-    } catch (error) {
+    } catch (error: any) {
       console.error("Chapter generation error", error);
-      alert("Error generating chapter content. Check API Key or Quota.");
+      alert(`Error generating chapter content: ${error.message || "Check API Key"}`);
        setState(prev => {
         const newChapters = [...prev.chapters];
         const idx = newChapters.findIndex(c => c.id === chapterId);
@@ -338,7 +359,9 @@ const App: React.FC = () => {
                 settingsRef.current, // Use ref
                 chapter, 
                 cumulativeSummaries,
-                lastChapterEnding
+                lastChapterEnding,
+                state.characters, // Pass characters
+                handleUsageUpdate
             );
             
             for await (const chunk of stream) {
@@ -353,7 +376,7 @@ const App: React.FC = () => {
              // Summarize
             let summary = chapter.summary;
             try {
-                 const genSummary = await GeminiService.summarizeChapter(fullContent, settingsRef.current); // Use ref
+                 const genSummary = await GeminiService.summarizeChapter(fullContent, settingsRef.current, handleUsageUpdate); // Use ref
                  if (genSummary) summary = genSummary;
             } catch (e) { console.error(e) }
 
@@ -374,7 +397,7 @@ const App: React.FC = () => {
             cumulativeSummaries += `\nChapter ${chapter.id}: ${summary}`;
             lastChapterEnding = fullContent.slice(-2000);
 
-        } catch (error) {
+        } catch (error: any) {
             console.error("Auto generation failed at chapter " + chapter.id, error);
             // Critical: Ensure we turn off generating flag so user can try again
             setState(prev => {
@@ -382,7 +405,7 @@ const App: React.FC = () => {
                 nextChapters[i] = { ...nextChapters[i], isGenerating: false };
                 return { ...prev, chapters: nextChapters };
             });
-            alert(`Auto-generation paused at Chapter ${chapter.id} due to network error. \nPlease click 'Generate' again to resume.`);
+            alert(`Auto-generation paused at Chapter ${chapter.id}: ${error.message || "Network/API Error"}`);
             break; // Stop the loop, allowing user to resume later
         }
     }
@@ -427,7 +450,9 @@ const App: React.FC = () => {
                 settingsRef.current, // Use ref
                 chapterConfig, 
                 cumulativeSummaries,
-                lastChapterEnding
+                lastChapterEnding,
+                state.characters, // Pass characters
+                handleUsageUpdate
             );
 
             for await (const chunk of stream) {
@@ -440,7 +465,7 @@ const App: React.FC = () => {
             }
             
             // Summarize
-            const summary = await GeminiService.summarizeChapter(fullContent, settingsRef.current); // Use ref
+            const summary = await GeminiService.summarizeChapter(fullContent, settingsRef.current, handleUsageUpdate); // Use ref
             
             // Mark done
             setState(prev => {
@@ -458,14 +483,14 @@ const App: React.FC = () => {
             cumulativeSummaries += `\nChapter ${chapterConfig.id}: ${summary}`;
             lastChapterEnding = fullContent.slice(-2000);
             
-        } catch (e) {
+        } catch (e: any) {
             console.error(e);
              setState(prev => {
                  const nextChapters = [...prev.chapters];
                  nextChapters[i] = { ...nextChapters[i], isGenerating: false };
                  return { ...prev, chapters: nextChapters };
             });
-            alert(`Error generating Chapter ${chapterConfig.id}. Process paused.`);
+            alert(`Error generating Chapter ${chapterConfig.id}: ${e.message}`);
             break; 
         }
     }
@@ -484,7 +509,7 @@ const App: React.FC = () => {
         const chapter = state.chapters[i];
         if (!chapter.isDone || !chapter.content) continue;
 
-        const analysis = await GeminiService.checkConsistency(chapter.content, state.characters, settingsRef.current); // Use ref
+        const analysis = await GeminiService.checkConsistency(chapter.content, state.characters, settingsRef.current, handleUsageUpdate); // Use ref
         
         // Update chapter with analysis result
         setState(prev => {
@@ -517,7 +542,8 @@ const App: React.FC = () => {
             chapter.content,
             state.characters,
             chapter.consistencyAnalysis,
-            settingsRef.current // Use ref
+            settingsRef.current, // Use ref
+            handleUsageUpdate
         );
 
         setState(prev => {
@@ -684,6 +710,31 @@ const App: React.FC = () => {
           </div>
         </div>
         
+        {/* Token Stats in Sidebar */}
+        <div className="px-4 py-2 border-b border-gray-100 bg-indigo-50/50">
+           <div className="flex items-center justify-between text-[10px] text-gray-600">
+               <div className="flex items-center space-x-1" title="Input Tokens">
+                   <Gauge size={10} className="text-indigo-500" />
+                   <span>In: {state.usage.inputTokens.toLocaleString()}</span>
+               </div>
+               <div className="flex items-center space-x-1" title="Output Tokens">
+                   <Gauge size={10} className="text-green-500" />
+                   <span>Out: {state.usage.outputTokens.toLocaleString()}</span>
+               </div>
+           </div>
+        </div>
+
+        {/* Premise Section */}
+        <div className="px-4 py-3 border-b border-gray-100 bg-white shrink-0">
+             <div className="flex items-center space-x-2 text-gray-700 mb-1">
+                 <BookOpen size={12} />
+                 <span className="text-xs font-bold">故事概要 (Premise)</span>
+             </div>
+             <p className="text-[10px] text-gray-500 leading-relaxed line-clamp-3 hover:line-clamp-none transition-all cursor-default" title={state.settings.premise}>
+                 {state.settings.premise}
+             </p>
+        </div>
+        
         <div className="flex-1 overflow-y-auto py-2">
           {state.chapters.map((chapter) => (
             <button
@@ -804,13 +855,16 @@ const App: React.FC = () => {
           onGenerate={generateChapterContent}
           onBack={handleBackToHome}
           onUpdateContent={handleUpdateChapter}
+          characters={state.characters} // Pass characters
         />
         
         {/* Modals */}
         <CharacterList 
             characters={state.characters} 
             isOpen={showCharacterModal} 
-            onClose={() => setShowCharacterModal(false)} 
+            onClose={() => setShowCharacterModal(false)}
+            onUpdateCharacters={handleUpdateCharacters}
+            settings={state.settings} // Pass settings for context
         />
         <ConsistencyReport 
             chapters={state.chapters}

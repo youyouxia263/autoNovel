@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { NovelSettings, Genre, Language, ModelProvider, WritingTone, WritingStyle, NarrativePerspective, NovelType } from '../types';
-import { BookOpen, PenTool, Sparkles, Globe, Wand2, Loader2, Bot, Key, Server, Feather, Eye, Mic2, Link, ScrollText, BookCopy, Globe2, Dna, Check, Square } from 'lucide-react';
-import { generatePremise, generateWorldSetting, expandText } from '../services/geminiService';
+import { BookOpen, PenTool, Sparkles, Globe, Wand2, Loader2, Bot, Key, Server, Feather, Eye, Mic2, Link, ScrollText, BookCopy, Globe2, Dna, Check, Square, Gauge, Users } from 'lucide-react';
+import { generatePremise, generateWorldSetting, expandText, generateCharacterConcepts } from '../services/geminiService';
 
 interface SettingsFormProps {
   settings: NovelSettings;
@@ -31,6 +31,9 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
   
   const [isGeneratingWorld, setIsGeneratingWorld] = useState(false);
   const [isExpandingWorld, setIsExpandingWorld] = useState(false);
+
+  const [isGeneratingCharacters, setIsGeneratingCharacters] = useState(false);
+  const [isExpandingCharacters, setIsExpandingCharacters] = useState(false);
   
   const handleChange = (field: keyof NovelSettings, value: any) => {
     onSettingsChange({ ...settings, [field]: value });
@@ -137,6 +140,41 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
     }
   };
 
+  const handleAiGenerateCharacters = async () => {
+    if (!settings.title && settings.genre.length === 0) {
+        alert("请先输入标题和选择类型 (Please enter a title and select at least one genre)");
+        return;
+    }
+    
+    setIsGeneratingCharacters(true);
+    try {
+        const result = await generateCharacterConcepts(settings);
+        handleChange('mainCharacters', result);
+    } catch (error) {
+        console.error(error);
+        alert("无法生成角色设定。");
+    } finally {
+        setIsGeneratingCharacters(false);
+    }
+  };
+
+  const handleAiExpandCharacters = async () => {
+    if (!settings.mainCharacters) {
+        alert("请先输入一些内容以便 AI 进行扩写 (Please enter some text to expand)");
+        return;
+    }
+    setIsExpandingCharacters(true);
+    try {
+        const result = await expandText(settings.mainCharacters, 'Characters', settings);
+        handleChange('mainCharacters', result);
+    } catch (error) {
+        console.error(error);
+        alert("扩写失败 (Expansion failed)");
+    } finally {
+        setIsExpandingCharacters(false);
+    }
+  };
+
   return (
     <div className="max-w-2xl mx-auto p-6 bg-white rounded-xl shadow-sm border border-gray-200 mt-10 mb-10">
       <div className="flex items-center space-x-3 mb-6 pb-4 border-b border-gray-100">
@@ -227,6 +265,24 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
                         />
                         <Server size={14} className="absolute left-2.5 top-2.5 text-gray-400" />
                     </div>
+                </div>
+                
+                {/* Max Tokens */}
+                 <div className="col-span-2 md:col-span-2">
+                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Max Output Tokens (最大输出Token)</label>
+                    <div className="relative">
+                        <input 
+                            type="number" 
+                            min="100"
+                            step="100"
+                            value={settings.maxOutputTokens || ''}
+                            onChange={(e) => handleChange('maxOutputTokens', parseInt(e.target.value))}
+                            placeholder="Default (Auto)"
+                            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-1 focus:ring-indigo-500 outline-none pl-8"
+                        />
+                        <Gauge size={14} className="absolute left-2.5 top-2.5 text-gray-400" />
+                    </div>
+                    <p className="text-[10px] text-gray-500 mt-1">Leave empty for model default. Higher values allow longer chapters.</p>
                 </div>
              </div>
         </div>
@@ -363,6 +419,44 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
                     : "定义世界背景、魔法/科技规则、特殊设定等..."
                 }
             />
+        </div>
+
+        {/* Character Setting - New */}
+        <div className="p-4 bg-blue-50 rounded-lg border border-blue-200 space-y-3">
+             <div className="flex justify-between items-center">
+                 <div className="flex items-center space-x-2 text-blue-800 font-medium">
+                    <Users size={18} />
+                    <span>主要角色 (Characters)</span>
+                 </div>
+                 <div className="flex space-x-2">
+                     <button
+                        onClick={handleAiGenerateCharacters}
+                        disabled={isGeneratingCharacters || isExpandingCharacters || !settings.title || settings.genre.length === 0}
+                        className="text-xs flex items-center space-x-1 text-blue-600 hover:text-blue-800 bg-white border border-blue-100 px-3 py-1 rounded-full transition-colors disabled:opacity-50"
+                     >
+                        {isGeneratingCharacters ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
+                        <span>生成 (Generate)</span>
+                     </button>
+                     <button
+                        onClick={handleAiExpandCharacters}
+                        disabled={isGeneratingCharacters || isExpandingCharacters || !settings.mainCharacters}
+                        className="text-xs flex items-center space-x-1 text-indigo-600 hover:text-indigo-800 bg-white border border-indigo-100 px-3 py-1 rounded-full transition-colors disabled:opacity-50"
+                        title="Expand existing text"
+                     >
+                        {isExpandingCharacters ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                        <span>AI 扩写 (Expand)</span>
+                     </button>
+                 </div>
+             </div>
+             <p className="text-xs text-blue-600/80">
+                 Pre-define characters here, or leave empty to auto-generate.
+             </p>
+             <textarea
+                value={settings.mainCharacters || ''}
+                onChange={(e) => handleChange('mainCharacters', e.target.value)}
+                className="w-full px-4 py-2 border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors min-h-[80px] text-sm"
+                placeholder="例如：李明（主角），性格坚毅；王强（反派），心狠手辣..."
+             />
         </div>
 
         <div>
