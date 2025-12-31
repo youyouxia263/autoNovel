@@ -22,27 +22,57 @@ export type WritingTone = 'Neutral' | 'Dark' | 'Humorous' | 'Melancholic' | 'Fas
 export type WritingStyle = 'Simple' | 'Moderate' | 'Complex' | 'Poetic';
 export type NarrativePerspective = 'First Person' | 'Third Person Limited' | 'Third Person Omniscient';
 
+export type StorageType = 'sqlite' | 'mysql';
+
+export interface StorageConfig {
+  type: StorageType;
+  // MySQL specific config
+  mysqlHost?: string;
+  mysqlPort?: string;
+  mysqlUser?: string;
+  mysqlPassword?: string;
+  mysqlDatabase?: string;
+}
+
+export interface ModelConfig {
+  id: string;
+  name: string; // User defined name (e.g. "My Paid GPT")
+  provider: ModelProvider;
+  baseUrl?: string;
+  apiKey?: string;
+  modelName?: string;
+  maxOutputTokens?: number;
+  createdAt: Date;
+}
+
 export interface NovelSettings {
+  id?: string; // UUID for persistence
   title: string;
   premise: string;
-  genre: Genre[]; // Changed to array
+  genre: Genre[]; 
   novelType: NovelType;
   targetWordCount: number;
   chapterCount: number;
   language: Language;
   worldSetting?: string;
-  mainCharacters?: string; // New: User provided initial characters
-  // Model Configuration
+  mainCharacters?: string; 
+  // Model Configuration (Active Session)
   provider: ModelProvider;
   baseUrl?: string; 
   apiKey?: string; 
   modelName?: string; 
-  maxOutputTokens?: number; // New: Configurable max tokens
+  maxOutputTokens?: number; 
   
+  // Prompt Configuration
+  customPrompts?: Record<string, string>; // Key: template_id, Value: user modified template
+
   // Style Configuration
   writingTone: WritingTone;
   writingStyle: WritingStyle;
   narrativePerspective: NarrativePerspective;
+
+  // Storage Configuration
+  storage: StorageConfig;
 }
 
 export interface AppearanceSettings {
@@ -88,5 +118,6 @@ export interface NovelState {
   currentChapterId: number | null;
   status: 'idle' | 'generating_outline' | 'ready';
   consistencyReport?: string | null;
-  usage: UsageStats; // New: Track token usage
+  usage: UsageStats; 
+  lastSaved?: Date; // Track save time
 }

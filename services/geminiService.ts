@@ -1,11 +1,17 @@
-import { GoogleGenAI, Type, Schema } from "@google/genai";
+
+import { GoogleGenAI, Type, Schema, GenerateContentResponse } from "@google/genai";
 import { NovelSettings, Chapter, ModelProvider, Character, GrammarIssue, Genre } from "../types";
+import { DEFAULT_PROMPTS, PROMPT_KEYS, fillPrompt } from "./promptTemplates";
 
 const GEMINI_API_KEY = process.env.API_KEY || '';
 
 // --- Universal Helpers ---
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const getPromptTemplate = (key: string, settings: NovelSettings) => {
+    return settings.customPrompts?.[key] || DEFAULT_PROMPTS[key] || "";
+};
 
 // Helper to handle cancellation
 async function wrapWithSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -345,23 +351,15 @@ export const expandText = async (
       : "OUTPUT LANGUAGE: English.";
     
     const genreString = settings.genre.join(', ');
+    const template = getPromptTemplate(PROMPT_KEYS.EXPAND_TEXT, settings);
     
-    const promptText = `
-      You are a creative writing assistant.
-      
-      Task: Expand the following ${contextType} for a ${genreString} novel titled "${settings.title}".
-      ${langInstruction}
-      
-      Original Input:
-      "${currentText}"
-      
-      Instructions:
-      - Flesh out the details, adding depth, atmosphere, and specific elements suitable for the genre.
-      - Keep the core idea but make it richer and more evocative.
-      - If the input is very short, creatively brainstorm based on it.
-      - Length: Approximately 200-300 words.
-      - Output ONLY the expanded text.
-    `;
+    const promptText = fillPrompt(template, {
+        contextType,
+        genre: genreString,
+        title: settings.title,
+        language: langInstruction,
+        currentText
+    });
     
     const systemInstruction = getSystemInstruction("You are an expert novelist.", settings);
   
@@ -376,7 +374,7 @@ export const expandText = async (
           model: model,
           contents: promptText,
           config,
-        }));
+        })) as GenerateContentResponse;
         
         if (response.usageMetadata && onUsage) {
             onUsage({
@@ -396,12 +394,29 @@ export const expandText = async (
     return await fetchOpenAICompatible(url, apiKey, model, [{role: 'user', content: promptText}], systemInstruction, undefined, settings.maxOutputTokens, onUsage);
 };
 
-export const generateCharacterConcepts = async (settings: NovelSettings, onUsage?: (u: {input: number, output: number}) => void): Promise<string> => {
+export const generateCharacterConcepts = async (settings: NovelSettings, onUsage?: (u: {input: number, output: number}) => void, count: number = 4): Promise<string> => {
     const language = settings.language;
     const genres = settings.genre;
     const langInstruction = language === 'zh' ? "OUTPUT LANGUAGE: Chinese (Simplified)." : "OUTPUT LANGUAGE: English.";
     
-    const promptText = `Task: Create a list of 3-5 main characters for "${settings.title}". Genres: ${genres.join(', ')}. ${langInstruction}. Premise: ${settings.premise}. World: ${settings.worldSetting}. Provide Name, Role, and a brief description for each. Output plain text suitable for a summary.`;
+    const template = getPromptTemplate(PROMPT_KEYS.GENERATE_CHARACTERS, settings);
+    const genreInstructions = getGenreSpecificInstructions(settings.genre);
+    const worldSettingContext = settings.worldSetting ? `WORLD SETTING: ${settings.worldSetting}` : ``;
+    const charContext = settings.mainCharacters 
+        ? `USER PROVIDED CHARACTERS (MUST INCLUDE/REFINE THESE): ${settings.mainCharacters}`
+        : ``;
+
+    const promptText = fillPrompt(template, {
+        title: settings.title,
+        genre: genres.join(', '),
+        premise: settings.premise,
+        language: langInstruction,
+        genreGuide: genreInstructions,
+        world: worldSettingContext,
+        characters: charContext,
+        count: count.toString()
+    });
+
     const systemInstruction = getSystemInstruction("You are a character designer.", settings);
 
     if (settings.provider === 'gemini') {
@@ -410,7 +425,7 @@ export const generateCharacterConcepts = async (settings: NovelSettings, onUsage
         const config: any = { systemInstruction };
         if (settings.maxOutputTokens) config.maxOutputTokens = settings.maxOutputTokens;
         
-        const response = await withRetry(() => ai.models.generateContent({ model, contents: promptText, config }));
+        const response = await withRetry(() => ai.models.generateContent({ model, contents: promptText, config })) as GenerateContentResponse;
         if (response.usageMetadata && onUsage) {
             onUsage({ input: response.usageMetadata.promptTokenCount || 0, output: response.usageMetadata.candidatesTokenCount || 0 });
         }
@@ -429,7 +444,15 @@ export const generateSingleCharacter = async (settings: NovelSettings, existingC
     const langInstruction = language === 'zh' ? "OUTPUT LANGUAGE: Chinese (Simplified)." : "OUTPUT LANGUAGE: English.";
     const existingNames = existingCharacters.map(c => c.name).join(', ');
     
-    const promptText = `Task: Create ONE new character for "${settings.title}" who interacts with: ${existingNames}. Genres: ${settings.genre.join(', ')}. ${langInstruction}. Premise: ${settings.premise}. Provide: name, role, description, relationships.`;
+    const template = getPromptTemplate(PROMPT_KEYS.GENERATE_SINGLE_CHARACTER, settings);
+    const promptText = fillPrompt(template, {
+        title: settings.title,
+        existingNames: existingNames,
+        genre: settings.genre.join(', '),
+        language: langInstruction,
+        premise: settings.premise
+    });
+
     const systemInstruction = getSystemInstruction("You are a character designer.", settings);
 
     if (settings.provider === 'gemini') {
@@ -448,7 +471,7 @@ export const generateSingleCharacter = async (settings: NovelSettings, existingC
         const config: any = { responseMimeType: "application/json", responseSchema, systemInstruction };
         if (settings.maxOutputTokens) config.maxOutputTokens = settings.maxOutputTokens;
         
-        const response = await withRetry(() => ai.models.generateContent({ model, contents: promptText, config }));
+        const response = await withRetry(() => ai.models.generateContent({ model, contents: promptText, config })) as GenerateContentResponse;
         if (response.usageMetadata && onUsage) {
             onUsage({ input: response.usageMetadata.promptTokenCount || 0, output: response.usageMetadata.candidatesTokenCount || 0 });
         }
@@ -479,7 +502,15 @@ export const generateWorldSetting = async (settings: NovelSettings, onUsage?: (u
         specificPrompt = "Define the World Setting: Time period, location, social rules.";
     }
   
-    const promptText = `Task: Create a World Setting for "${settings.title}". Genres: ${genres.join(', ')}. ${langInstruction}. Premise: ${settings.premise}. ${specificPrompt}. Keep it under 300 words.`;
+    const template = getPromptTemplate(PROMPT_KEYS.GENERATE_WORLD, settings);
+    const promptText = fillPrompt(template, {
+        title: settings.title,
+        genre: genres.join(', '),
+        language: langInstruction,
+        premise: settings.premise,
+        specificPrompt: specificPrompt
+    });
+
     const systemInstruction = getSystemInstruction("You are a world-building expert.", settings);
   
     if (settings.provider === 'gemini') {
@@ -488,7 +519,7 @@ export const generateWorldSetting = async (settings: NovelSettings, onUsage?: (u
         const config: any = { systemInstruction };
         if (settings.maxOutputTokens) config.maxOutputTokens = settings.maxOutputTokens;
         
-        const response = await withRetry(() => ai.models.generateContent({ model, contents: promptText, config }));
+        const response = await withRetry(() => ai.models.generateContent({ model, contents: promptText, config })) as GenerateContentResponse;
         
         if (response.usageMetadata && onUsage) {
             onUsage({
@@ -515,7 +546,13 @@ export const generatePremise = async (title: string, currentPremise: string, set
       ? `Expand idea: "${currentPremise}" into a plot summary.`
       : `Create a plot summary for "${title}".`;
   
-    const promptText = `Task: ${task}. Genres: ${genreString}. ${langInstruction}. Return ONLY summary text.`;
+    const template = getPromptTemplate(PROMPT_KEYS.GENERATE_PREMISE, settings);
+    const promptText = fillPrompt(template, {
+        task,
+        genre: genreString,
+        language: langInstruction
+    });
+
     const systemInstruction = getSystemInstruction("You are a creative writing assistant.", settings);
   
     if (settings.provider === 'gemini') {
@@ -523,7 +560,7 @@ export const generatePremise = async (title: string, currentPremise: string, set
         const model = settings.modelName || "gemini-3-flash-preview";
         const config: any = { systemInstruction };
         if (settings.maxOutputTokens) config.maxOutputTokens = settings.maxOutputTokens;
-        const response = await withRetry(() => ai.models.generateContent({ model, contents: promptText, config }));
+        const response = await withRetry(() => ai.models.generateContent({ model, contents: promptText, config })) as GenerateContentResponse;
         
         if (response.usageMetadata && onUsage) {
             onUsage({
@@ -551,7 +588,7 @@ export const summarizeChapter = async (content: string, settings: NovelSettings,
        const model = settings.modelName || "gemini-3-flash-preview";
        const config: any = { systemInstruction };
        if (settings.maxOutputTokens) config.maxOutputTokens = settings.maxOutputTokens;
-       const response = await withRetry(() => ai.models.generateContent({ model, contents: promptText, config }));
+       const response = await withRetry(() => ai.models.generateContent({ model, contents: promptText, config })) as GenerateContentResponse;
        if (response.usageMetadata && onUsage) {
             onUsage({
                 input: response.usageMetadata.promptTokenCount || 0,
@@ -592,18 +629,19 @@ export const generateOutline = async (settings: NovelSettings, signal?: AbortSig
     ? `CHARACTERS (Initial Ideas): ${settings.mainCharacters}`
     : `CHARACTERS: To be developed.`;
 
-  const promptText = `
-    Create a chapter outline for "${settings.title}".
-    Genres: ${genreString}
-    ${languageInstruction}
-    Premise: ${settings.premise}.
-    ${formatInstruction}
-    ${genreInstructions}
-    ${worldSettingContext}
-    ${charContext}
-    IMPORTANT - STRUCTURE: ${structureInstruction}
-    For each chapter, provide 'id', 'title', and 'summary'.
-  `;
+  const template = getPromptTemplate(PROMPT_KEYS.GENERATE_OUTLINE, settings);
+  const promptText = fillPrompt(template, {
+      title: settings.title,
+      genre: genreString,
+      language: languageInstruction,
+      premise: settings.premise,
+      format: formatInstruction,
+      genreGuide: genreInstructions,
+      world: worldSettingContext,
+      characters: charContext,
+      structure: structureInstruction
+  });
+
   const systemInstruction = getSystemInstruction("You are an expert novelist.", settings);
 
   if (settings.provider === 'gemini') {
@@ -636,7 +674,7 @@ export const generateOutline = async (settings: NovelSettings, signal?: AbortSig
             config,
         })),
         signal
-      );
+      ) as GenerateContentResponse;
 
       if (response.usageMetadata && onUsage) {
             onUsage({
@@ -675,7 +713,7 @@ export const generateOutline = async (settings: NovelSettings, signal?: AbortSig
   return result;
 };
 
-export const generateCharacters = async (settings: NovelSettings, signal?: AbortSignal, onUsage?: (u: {input: number, output: number}) => void): Promise<Character[]> => {
+export const generateCharacters = async (settings: NovelSettings, signal?: AbortSignal, onUsage?: (u: {input: number, output: number}) => void, count: number = 4): Promise<Character[]> => {
   const languageInstruction = settings.language === 'zh' ? "OUTPUT LANGUAGE: Chinese (Simplified)." : "OUTPUT LANGUAGE: English.";
   const genreInstructions = getGenreSpecificInstructions(settings.genre);
   const worldSettingContext = settings.worldSetting ? `WORLD SETTING: ${settings.worldSetting}` : ``;
@@ -684,16 +722,18 @@ export const generateCharacters = async (settings: NovelSettings, signal?: Abort
     ? `USER PROVIDED CHARACTERS (MUST INCLUDE/REFINE THESE): ${settings.mainCharacters}`
     : ``;
 
-  const promptText = `
-    Create 3-6 main characters for "${settings.title}".
-    Genres: ${settings.genre.join(', ')}
-    Premise: ${settings.premise}
-    ${languageInstruction}
-    ${genreInstructions}
-    ${worldSettingContext}
-    ${charContext}
-    Provide: name, role, description, relationships.
-  `;
+  const template = getPromptTemplate(PROMPT_KEYS.GENERATE_CHARACTERS, settings);
+  const promptText = fillPrompt(template, {
+      title: settings.title,
+      genre: settings.genre.join(', '),
+      premise: settings.premise,
+      language: languageInstruction,
+      genreGuide: genreInstructions,
+      world: worldSettingContext,
+      characters: charContext,
+      count: count.toString()
+  });
+  
   const systemInstruction = getSystemInstruction("You are a character designer.", settings);
 
   if (settings.provider === 'gemini') {
@@ -727,7 +767,7 @@ export const generateCharacters = async (settings: NovelSettings, signal?: Abort
             config,
         })),
         signal
-      );
+      ) as GenerateContentResponse;
       if (response.usageMetadata && onUsage) {
             onUsage({
                 input: response.usageMetadata.promptTokenCount || 0,
@@ -749,14 +789,20 @@ export const generateCharacters = async (settings: NovelSettings, signal?: Abort
 
 export const checkConsistency = async (content: string, characters: Character[], settings: NovelSettings, onUsage?: (u: {input: number, output: number}) => void): Promise<string> => {
     const charProfiles = characters.map(c => `${c.name} (${c.role}): ${c.description}. Relationships: ${c.relationships}`).join('\n');
-    const promptText = `Analyze consistency.\nProfiles:\n${charProfiles}\nContent:\n${content.slice(0, 15000)}`;
+    
+    const template = getPromptTemplate(PROMPT_KEYS.CHECK_CONSISTENCY, settings);
+    const promptText = fillPrompt(template, {
+        characters: charProfiles,
+        content: content.slice(0, 15000)
+    });
+    
     const systemInstruction = getSystemInstruction("You are a continuity editor.", settings);
     if (settings.provider === 'gemini') {
         const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
         const model = settings.modelName || "gemini-3-flash-preview";
         const config: any = { systemInstruction };
         if (settings.maxOutputTokens) config.maxOutputTokens = settings.maxOutputTokens;
-        const response = await withRetry(() => ai.models.generateContent({ model, contents: promptText, config }));
+        const response = await withRetry(() => ai.models.generateContent({ model, contents: promptText, config })) as GenerateContentResponse;
         if (response.usageMetadata && onUsage) {
             onUsage({
                 input: response.usageMetadata.promptTokenCount || 0,
@@ -774,14 +820,21 @@ export const checkConsistency = async (content: string, characters: Character[],
 
 export const fixChapterConsistency = async (content: string, characters: Character[], analysis: string, settings: NovelSettings, onUsage?: (u: {input: number, output: number}) => void): Promise<string> => {
     const charProfiles = characters.map(c => `${c.name}: ${c.description}`).join('\n');
-    const promptText = `Rewrite to fix consistency.\nIssues:${analysis}\nProfiles:${charProfiles}\nContent:${content}`;
+    
+    const template = getPromptTemplate(PROMPT_KEYS.FIX_CONSISTENCY, settings);
+    const promptText = fillPrompt(template, {
+        analysis: analysis,
+        characters: charProfiles,
+        content: content
+    });
+
     const systemInstruction = getSystemInstruction("Expert editor.", settings);
     if (settings.provider === 'gemini') {
         const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
         const model = settings.modelName || "gemini-3-pro-preview";
         const config: any = { systemInstruction };
         if (settings.maxOutputTokens) config.maxOutputTokens = settings.maxOutputTokens;
-        const response = await withRetry(() => ai.models.generateContent({ model, contents: promptText, config }));
+        const response = await withRetry(() => ai.models.generateContent({ model, contents: promptText, config })) as GenerateContentResponse;
         if (response.usageMetadata && onUsage) {
             onUsage({
                 input: response.usageMetadata.promptTokenCount || 0,
@@ -806,7 +859,7 @@ export const checkGrammar = async (text: string, settings: NovelSettings, onUsag
         const responseSchema: Schema = { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { original: { type: Type.STRING }, suggestion: { type: Type.STRING }, explanation: { type: Type.STRING } } } };
         const config: any = { responseMimeType: "application/json", responseSchema, systemInstruction };
         if (settings.maxOutputTokens) config.maxOutputTokens = settings.maxOutputTokens;
-        const response = await withRetry(() => ai.models.generateContent({ model, contents: promptText, config }));
+        const response = await withRetry(() => ai.models.generateContent({ model, contents: promptText, config })) as GenerateContentResponse;
         if (response.usageMetadata && onUsage) {
             onUsage({
                 input: response.usageMetadata.promptTokenCount || 0,
@@ -831,7 +884,7 @@ export const autoCorrectGrammar = async (text: string, settings: NovelSettings, 
         const model = settings.modelName || "gemini-3-flash-preview";
         const config: any = { systemInstruction };
         if (settings.maxOutputTokens) config.maxOutputTokens = settings.maxOutputTokens;
-        const response = await withRetry(() => ai.models.generateContent({ model, contents: promptText, config }));
+        const response = await withRetry(() => ai.models.generateContent({ model, contents: promptText, config })) as GenerateContentResponse;
         if (response.usageMetadata && onUsage) {
             onUsage({
                 input: response.usageMetadata.promptTokenCount || 0,
@@ -862,7 +915,7 @@ export const continueWriting = async function* (currentContent: string, settings
         const config: any = { systemInstruction };
         if (settings.maxOutputTokens) config.maxOutputTokens = settings.maxOutputTokens;
         
-        const stream = await withRetry(() => ai.models.generateContentStream({ model, contents: promptText, config }));
+        const stream = await withRetry(() => ai.models.generateContentStream({ model, contents: promptText, config })) as AsyncIterable<GenerateContentResponse>;
         
         for await (const chunk of stream) { 
              if (chunk.usageMetadata && onUsage) {
@@ -883,23 +936,42 @@ export const continueWriting = async function* (currentContent: string, settings
     for await (const text of stream) { yield text; }
 };
 
-export const generateChapterStream = async function* (settings: NovelSettings, chapter: Chapter, storySummaries: string = "", lastChapterEnding: string = "", characters: Character[] = [], onUsage?: (u: {input: number, output: number}) => void) {
+export const generateChapterStream = async function* (
+    settings: NovelSettings, 
+    chapter: Chapter, 
+    storySummaries: string = "", 
+    previousChapterContent: string = "", 
+    characters: Character[] = [], 
+    onUsage?: (u: {input: number, output: number}) => void
+) {
     const languageInstruction = settings.language === 'zh' ? "IMPORTANT: Write in Chinese (Simplified)." : "IMPORTANT: Write in English.";
     const styleInstructions = getStyleInstructions(settings);
     const genreInstructions = getGenreSpecificInstructions(settings.genre);
     const isOneShot = settings.novelType === 'short' || settings.chapterCount === 1;
     let task = `Write Chapter ${chapter.id}: "${chapter.title}".`;
-    if (isOneShot) task = `Write COMPLETE short story "${settings.title}". Chapter: "${chapter.title}".`;
+    if (isOneShot) task = `Write a COMPLETE, COHERENT short story "${settings.title}" with a TIGHT plot. Chapter title: "${chapter.title}". Ensure the narrative arc is fully resolved within this text.`;
 
-    let context = "";
-    if (storySummaries) context += `### SUMMARIES ###\n${storySummaries}\n\n`;
-    if (lastChapterEnding) context += `### PREVIOUS SCENE ###\n${lastChapterEnding}\n\n`;
-    
+    let charContext = "";
     if (characters && characters.length > 0) {
-        context += `### CHARACTERS ###\n` + characters.map(c => `- ${c.name} (${c.role}): ${c.description}. Relations: ${c.relationships}`).join("\n") + "\n\n";
+        charContext = "### CHARACTERS ###\n" + characters.map(c => `- ${c.name} (${c.role}): ${c.description}. Relations: ${c.relationships}`).join("\n");
     }
 
-    const promptText = `${task}\n${languageInstruction}\nChapter Plan: ${chapter.summary}\nPremise: ${settings.premise}\n${context}\n${styleInstructions}\n${genreInstructions}\n\nCRITICAL: Seamless transition. No repetition. Show don't tell.`;
+    const template = getPromptTemplate(PROMPT_KEYS.GENERATE_CHAPTER, settings);
+    const promptText = fillPrompt(template, {
+        task,
+        language: languageInstruction,
+        chapterId: chapter.id.toString(),
+        chapterSummary: chapter.summary,
+        premise: settings.premise,
+        storySummaries: storySummaries || "No previous chapters.",
+        previousChapterContent: previousChapterContent || "This is the first chapter.",
+        characters: charContext,
+        style: styleInstructions,
+        genreGuide: genreInstructions,
+        // Backward compatibility
+        context: `Summaries:\n${storySummaries}\n\nPrevious Scene:\n${previousChapterContent}\n\nCharacters:\n${charContext}`
+    });
+
     const systemInstruction = getSystemInstruction("Best-selling author.", settings);
 
     if (settings.provider === 'gemini') {
@@ -909,7 +981,7 @@ export const generateChapterStream = async function* (settings: NovelSettings, c
         if (!settings.modelName) config.thinkingConfig = { thinkingBudget: 2048 };
         if (settings.maxOutputTokens) config.maxOutputTokens = settings.maxOutputTokens;
 
-        const stream = await withRetry(() => ai.models.generateContentStream({ model, contents: promptText, config }));
+        const stream = await withRetry(() => ai.models.generateContentStream({ model, contents: promptText, config })) as AsyncIterable<GenerateContentResponse>;
         
         for await (const chunk of stream) { 
             if (chunk.usageMetadata && onUsage) {

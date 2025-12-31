@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { NovelSettings, Genre, Language, ModelProvider, WritingTone, WritingStyle, NarrativePerspective, NovelType } from '../types';
-import { BookOpen, PenTool, Sparkles, Globe, Wand2, Loader2, Bot, Key, Server, Feather, Eye, Mic2, Link, ScrollText, BookCopy, Globe2, Dna, Check, Square, Gauge, Users } from 'lucide-react';
+import { NovelSettings, Genre, Language, ModelProvider, WritingTone, WritingStyle, NarrativePerspective, NovelType, StorageType } from '../types';
+import { BookOpen, PenTool, Sparkles, Globe, Wand2, Loader2, Feather, Eye, Mic2, ScrollText, BookCopy, Globe2, Dna, Check, Square, Users, Database, HardDrive, Server } from 'lucide-react';
 import { generatePremise, generateWorldSetting, expandText, generateCharacterConcepts } from '../services/geminiService';
 
 interface SettingsFormProps {
@@ -39,12 +39,22 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
     onSettingsChange({ ...settings, [field]: value });
   };
 
+  const handleStorageChange = (field: string, value: any) => {
+      onSettingsChange({
+          ...settings,
+          storage: {
+              ...settings.storage,
+              [field]: value
+          }
+      });
+  };
+
   const handleNovelTypeChange = (type: NovelType) => {
     if (type === 'short') {
         onSettingsChange({
             ...settings,
             novelType: 'short',
-            targetWordCount: 5000, 
+            targetWordCount: 60000, 
             chapterCount: 1 
         });
     } else {
@@ -189,102 +199,82 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
 
       <div className="space-y-6">
         
-        {/* Model Configuration Section */}
-        <div className="p-4 bg-gray-50 rounded-lg border border-gray-200 space-y-4">
-             <div className="flex items-center space-x-2 text-indigo-700 font-medium">
-                <Bot size={18} />
-                <span>模型配置 (AI Model Settings)</span>
+        {/* Storage Configuration */}
+        <div className="p-4 bg-emerald-50 rounded-lg border border-emerald-200 space-y-4">
+             <div className="flex items-center space-x-2 text-emerald-800 font-medium">
+                <Database size={18} />
+                <span>持久化存储 (Persistence / DAO)</span>
              </div>
              
-             <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Provider (服务商)</label>
-                <select
-                    value={settings.provider}
-                    onChange={(e) => handleChange('provider', e.target.value as ModelProvider)}
-                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-1 focus:ring-indigo-500 outline-none"
-                >
-                    <option value="gemini">Google Gemini</option>
-                    <option value="alibaba">阿里百炼 (Alibaba Bailian)</option>
-                    <option value="volcano">火山引擎 (Volcano Engine)</option>
-                    <option value="custom">Custom (OpenAI Compatible)</option>
-                </select>
+             <div className="flex space-x-4 mb-2">
+                 <label className="flex items-center space-x-2 cursor-pointer">
+                     <input 
+                        type="radio" 
+                        name="storageType" 
+                        value="sqlite"
+                        checked={settings.storage.type === 'sqlite'}
+                        onChange={() => handleStorageChange('type', 'sqlite')}
+                        className="text-emerald-600 focus:ring-emerald-500"
+                     />
+                     <span className="text-sm font-medium text-gray-700 flex items-center gap-1"><HardDrive size={14}/> Local (SQLite/IndexedDB)</span>
+                 </label>
+                 <label className="flex items-center space-x-2 cursor-pointer">
+                     <input 
+                        type="radio" 
+                        name="storageType" 
+                        value="mysql"
+                        checked={settings.storage.type === 'mysql'}
+                        onChange={() => handleStorageChange('type', 'mysql')}
+                        className="text-emerald-600 focus:ring-emerald-500"
+                     />
+                     <span className="text-sm font-medium text-gray-700 flex items-center gap-1"><Server size={14}/> Remote (MySQL)</span>
+                 </label>
              </div>
 
-             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                 {/* API Key - Hidden for Gemini */}
-                 {settings.provider !== 'gemini' && (
-                    <div className={settings.provider === 'custom' ? "col-span-1" : "col-span-2 md:col-span-1"}>
-                        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">API Key</label>
-                        <div className="relative">
-                            <input 
-                                type="password" 
-                                value={settings.apiKey || ''}
-                                onChange={(e) => handleChange('apiKey', e.target.value)}
-                                placeholder="sk-..."
-                                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-1 focus:ring-indigo-500 outline-none pl-8"
-                            />
-                            <Key size={14} className="absolute left-2.5 top-2.5 text-gray-400" />
-                        </div>
-                    </div>
-                 )}
-
-                 {/* Base URL - Only for Custom */}
-                 {settings.provider === 'custom' && (
-                    <div className="col-span-1">
-                        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Base URL</label>
-                        <div className="relative">
-                            <input 
-                                type="text" 
-                                value={settings.baseUrl || ''}
-                                onChange={(e) => handleChange('baseUrl', e.target.value)}
-                                placeholder="https://api.example.com/v1"
-                                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-1 focus:ring-indigo-500 outline-none pl-8"
-                            />
-                            <Link size={14} className="absolute left-2.5 top-2.5 text-gray-400" />
-                        </div>
-                    </div>
-                 )}
-
-                 {/* Model Name */}
-                 <div className={settings.provider === 'gemini' ? "col-span-2" : "col-span-2 md:col-span-1"}>
-                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
-                        {settings.provider === 'volcano' ? 'Endpoint ID (接入点 ID)' : 'Model Name (模型名称)'}
-                    </label>
-                     <div className="relative">
-                        <input 
+             {settings.storage.type === 'mysql' && (
+                 <div className="grid grid-cols-2 gap-3 animate-in fade-in slide-in-from-top-2">
+                     <div>
+                         <label className="block text-xs font-semibold text-gray-500 mb-1">Host</label>
+                         <input 
                             type="text" 
-                            value={settings.modelName || ''}
-                            onChange={(e) => handleChange('modelName', e.target.value)}
-                            placeholder={
-                                settings.provider === 'gemini' ? 'Default: gemini-3-flash/pro' :
-                                settings.provider === 'alibaba' ? 'qwen-plus' :
-                                settings.provider === 'volcano' ? 'ep-2024...' :
-                                'gpt-4o'
-                            }
-                            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-1 focus:ring-indigo-500 outline-none pl-8"
-                        />
-                        <Server size={14} className="absolute left-2.5 top-2.5 text-gray-400" />
-                    </div>
-                </div>
-                
-                {/* Max Tokens */}
-                 <div className="col-span-2 md:col-span-2">
-                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Max Output Tokens (最大输出Token)</label>
-                    <div className="relative">
-                        <input 
-                            type="number" 
-                            min="100"
-                            step="100"
-                            value={settings.maxOutputTokens || ''}
-                            onChange={(e) => handleChange('maxOutputTokens', parseInt(e.target.value))}
-                            placeholder="Default (Auto)"
-                            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-1 focus:ring-indigo-500 outline-none pl-8"
-                        />
-                        <Gauge size={14} className="absolute left-2.5 top-2.5 text-gray-400" />
-                    </div>
-                    <p className="text-[10px] text-gray-500 mt-1">Leave empty for model default. Higher values allow longer chapters.</p>
-                </div>
-             </div>
+                            placeholder="localhost" 
+                            value={settings.storage.mysqlHost || ''}
+                            onChange={(e) => handleStorageChange('mysqlHost', e.target.value)}
+                            className="w-full text-sm border p-1.5 rounded"
+                         />
+                     </div>
+                     <div>
+                         <label className="block text-xs font-semibold text-gray-500 mb-1">Port</label>
+                         <input 
+                            type="text" 
+                            placeholder="3306" 
+                            value={settings.storage.mysqlPort || ''}
+                            onChange={(e) => handleStorageChange('mysqlPort', e.target.value)}
+                            className="w-full text-sm border p-1.5 rounded"
+                         />
+                     </div>
+                     <div>
+                         <label className="block text-xs font-semibold text-gray-500 mb-1">User</label>
+                         <input 
+                            type="text" 
+                            placeholder="root" 
+                            value={settings.storage.mysqlUser || ''}
+                            onChange={(e) => handleStorageChange('mysqlUser', e.target.value)}
+                            className="w-full text-sm border p-1.5 rounded"
+                         />
+                     </div>
+                     <div>
+                         <label className="block text-xs font-semibold text-gray-500 mb-1">Database</label>
+                         <input 
+                            type="text" 
+                            placeholder="novel_db" 
+                            value={settings.storage.mysqlDatabase || ''}
+                            onChange={(e) => handleStorageChange('mysqlDatabase', e.target.value)}
+                            className="w-full text-sm border p-1.5 rounded"
+                         />
+                     </div>
+                 </div>
+             )}
         </div>
 
         {/* Novel Format Selection */}
@@ -421,7 +411,7 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
             />
         </div>
 
-        {/* Character Setting - New */}
+        {/* Character Setting */}
         <div className="p-4 bg-blue-50 rounded-lg border border-blue-200 space-y-3">
              <div className="flex justify-between items-center">
                  <div className="flex items-center space-x-2 text-blue-800 font-medium">
@@ -579,7 +569,7 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
                <span className="absolute right-4 top-2 text-gray-400 text-sm">字</span>
              </div>
              <p className="text-[10px] text-gray-500 mt-1">
-                {settings.novelType === 'short' ? 'Range: 3,000 - 10,000 words' : 'Unlimited'}
+                {settings.novelType === 'short' ? 'Target ~60,000 words' : 'Unlimited'}
              </p>
           </div>
         </div>

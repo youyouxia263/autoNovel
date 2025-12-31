@@ -1,17 +1,21 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { NovelState, NovelSettings, Genre, AppearanceSettings, Chapter, Character } from './types';
 import * as GeminiService from './services/geminiService';
+import { DAOFactory } from './services/dao'; 
 import SettingsForm from './components/SettingsForm';
 import Reader from './components/Reader';
 import CharacterList from './components/CharacterList';
 import ConsistencyReport from './components/ConsistencyReport';
-import { Layout, Menu, ChevronRight, CheckCircle2, Circle, Save, Download, FileText, Printer, RefreshCw, Sparkles, Users, FileSearch, BookOpen, Gauge } from 'lucide-react';
+import AppSidebar from './components/AppSidebar';
+import ModelConfigManager from './components/ModelConfigManager';
+import PromptConfigManager from './components/PromptConfigManager';
+import { Menu, ChevronRight, CheckCircle2, Circle, Download, FileText, Printer, Sparkles, Users, FileSearch, BookOpen, Gauge, Database, Loader2 } from 'lucide-react';
 
-// Initial default settings
-const DEFAULT_SETTINGS: NovelSettings = {
+// Initial default settings factory
+const getDefaultSettings = (): NovelSettings => ({
   title: '',
   premise: '',
-  genre: [Genre.Suspense, Genre.Romance], // Default to multiple genres example
+  genre: [Genre.Suspense, Genre.Romance], 
   novelType: 'long',
   targetWordCount: 10000, 
   chapterCount: 5,
@@ -25,7 +29,9 @@ const DEFAULT_SETTINGS: NovelSettings = {
   writingStyle: 'Moderate',
   narrativePerspective: 'Third Person Limited',
   maxOutputTokens: undefined, 
-};
+  storage: { type: 'sqlite' },
+  customPrompts: {}
+});
 
 const DEFAULT_APPEARANCE: AppearanceSettings = {
   fontFamily: 'font-serif',
@@ -38,7 +44,6 @@ const DEFAULT_APPEARANCE: AppearanceSettings = {
 // Helper for word count
 const getWordCount = (text: string) => {
     if (!text) return 0;
-    // Heuristic: if > 50% non-ascii, count chars, else count words
     const nonAscii = (text.match(/[^\x00-\x7F]/g) || []).length;
     if (nonAscii > text.length * 0.5) {
         return text.replace(/\s/g, '').length;
@@ -47,9 +52,12 @@ const getWordCount = (text: string) => {
 };
 
 const App: React.FC = () => {
-  // --- State ---
+  // --- View State ---
+  const [currentView, setCurrentView] = useState<'workspace' | 'models' | 'prompts'>('workspace');
+
+  // --- Novel State ---
   const [state, setState] = useState<NovelState>({
-    settings: DEFAULT_SETTINGS,
+    settings: getDefaultSettings(),
     chapters: [],
     characters: [],
     currentChapterId: null,
@@ -58,27 +66,123 @@ const App: React.FC = () => {
     usage: { inputTokens: 0, outputTokens: 0 }
   });
 
-  // Ref to track latest settings for async operations
+  const [appearance, setAppearance] = useState<AppearanceSettings>(DEFAULT_APPEARANCE);
+  const [sidebarOpen, setSidebarOpen] = useState(true); 
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const [showCharacterModal, setShowCharacterModal] = useState(false);
+  const [showConsistencyReport, setShowConsistencyReport] = useState(false);
+  const [isCheckingConsistency, setIsCheckingConsistency] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  
+  // Library State
+  const [savedNovels, setSavedNovels] = useState<{id: string, title: string, updatedAt: Date}[]>([]);
+
+  // Refs
   const settingsRef = useRef(state.settings);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     settingsRef.current = state.settings;
   }, [state.settings]);
 
-  const [appearance, setAppearance] = useState<AppearanceSettings>(DEFAULT_APPEARANCE);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [showExportMenu, setShowExportMenu] = useState(false);
-  const [showCharacterModal, setShowCharacterModal] = useState(false);
-  const [showConsistencyReport, setShowConsistencyReport] = useState(false);
-  const [isCheckingConsistency, setIsCheckingConsistency] = useState(false);
+  // --- Persistence Logic ---
+  
+  const refreshLibrary = async () => {
+      // Use current settings for DAO connection info if possible, or defaults
+      const dao = DAOFactory.getDAO(state.settings.storage.type === 'mysql' ? state.settings : getDefaultSettings());
+      try {
+          const novels = await dao.listNovels();
+          setSavedNovels(novels.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()));
+      } catch (e) {
+          console.error("Failed to list novels", e);
+      }
+  };
 
-  // Abort Controller for stopping generation (Outline/Characters)
-  const abortControllerRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+      refreshLibrary();
+  }, []);
 
-  // Calculate stats
+  const handleLoadNovel = async (id: string) => {
+      if (state.status === 'generating_outline') return;
+      
+      const dao = DAOFactory.getDAO(state.settings); // Use current config to load, assuming same storage
+      try {
+          const loaded = await dao.loadNovel(id);
+          if (loaded) {
+              // Ensure status is 'ready' if chapters exist so the reader view is shown
+              if (loaded.chapters && loaded.chapters.length > 0 && loaded.status === 'idle') {
+                  loaded.status = 'ready';
+              }
+              
+              setState(loaded);
+              setSidebarOpen(true);
+              setCurrentView('workspace'); // Ensure view switches to workspace
+          }
+      } catch (e) {
+          console.error("Failed to load novel", e);
+          alert("Failed to load novel.");
+      }
+  };
+
+  const handleDeleteNovel = async (id: string) => {
+      if (!window.confirm("Are you sure you want to delete this novel?")) return;
+      const dao = DAOFactory.getDAO(state.settings);
+      await dao.deleteNovel(id);
+      await refreshLibrary();
+      
+      if (state.settings.id === id) {
+          handleCreateNew();
+      }
+  };
+
+  const handleManualSave = async () => {
+      if (!state.settings.title) return; 
+      setIsSaving(true);
+      try {
+          const dao = DAOFactory.getDAO(state.settings);
+          const id = await dao.saveNovel(state);
+          if (state.settings.id !== id) {
+              setState(prev => ({
+                  ...prev,
+                  settings: { ...prev.settings, id }
+              }));
+          }
+          await refreshLibrary();
+          await new Promise(r => setTimeout(r, 500));
+      } catch (e) {
+          console.error("Save failed", e);
+          alert("保存失败 (Save Failed): " + (e as Error).message);
+      } finally {
+          setIsSaving(false);
+      }
+  };
+
+  const handleCreateNew = () => {
+      if (state.status === 'ready' && state.chapters.some(c => c.isDone || c.content)) {
+        if (!window.confirm("Creating new novel will close current one. Unsaved progress might be lost (Auto-save is on). Continue?")) {
+            return;
+        }
+      }
+      
+      if (abortControllerRef.current) {
+          abortControllerRef.current.abort();
+          abortControllerRef.current = null;
+      }
+
+      setState({
+        settings: getDefaultSettings(),
+        chapters: [],
+        characters: [],
+        currentChapterId: null,
+        status: 'idle',
+        usage: { inputTokens: 0, outputTokens: 0 }
+      });
+      setSidebarOpen(true);
+      setCurrentView('workspace');
+  };
+
   const totalWordCount = state.chapters.reduce((acc, c) => acc + getWordCount(c.content || ''), 0);
 
-  // --- Helpers ---
   const handleUsageUpdate = (usage: { input: number; output: number }) => {
     setState(prev => ({
         ...prev,
@@ -89,38 +193,12 @@ const App: React.FC = () => {
     }));
   };
 
-  // --- Handlers ---
-
   const handleSettingsChange = (newSettings: NovelSettings) => {
     setState(prev => ({ ...prev, settings: newSettings }));
   };
 
   const handleAppearanceChange = (newAppearance: Partial<AppearanceSettings>) => {
     setAppearance(prev => ({ ...prev, ...newAppearance }));
-  };
-
-  const handleBackToHome = () => {
-    if (state.status === 'ready' && state.chapters.some(c => c.isDone || c.content)) {
-      if (!window.confirm("返回首页将丢失当前生成的内容，确定要返回吗？\nReturning to home will lose current progress. Continue?")) {
-        return;
-      }
-    }
-    
-    // Stop any ongoing outline generation if we go back
-    if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-        abortControllerRef.current = null;
-    }
-
-    setState({
-      settings: DEFAULT_SETTINGS,
-      chapters: [],
-      characters: [],
-      currentChapterId: null,
-      status: 'idle',
-      usage: { inputTokens: 0, outputTokens: 0 }
-    });
-    setSidebarOpen(true);
   };
 
   const handleUpdateChapter = (chapterId: number, newContent: string) => {
@@ -137,7 +215,6 @@ const App: React.FC = () => {
   };
 
   const generateOutlineAndCharacters = async () => {
-    // Create new controller
     if (abortControllerRef.current) {
         abortControllerRef.current.abort();
     }
@@ -147,7 +224,6 @@ const App: React.FC = () => {
     setState(prev => ({ ...prev, status: 'generating_outline' }));
     
     try {
-      // Parallel generation for speed, passing signal
       const [outline, characters] = await Promise.all([
          GeminiService.generateOutline(settingsRef.current, controller.signal, handleUsageUpdate),
          GeminiService.generateCharacters(settingsRef.current, controller.signal, handleUsageUpdate)
@@ -167,10 +243,12 @@ const App: React.FC = () => {
         status: 'ready',
         currentChapterId: newChapters[0]?.id || null
       }));
+      
+      setTimeout(() => handleManualSave(), 1000);
+
     } catch (error: any) {
       if (error.name === 'AbortError' || error.message?.includes('Aborted')) {
           console.log("Generation stopped by user.");
-          // Status reset handled by stop handler usually, but ensure consistency
           setState(prev => ({ ...prev, status: 'idle' }));
       } else {
           console.error("Generation failed", error);
@@ -187,13 +265,11 @@ const App: React.FC = () => {
           abortControllerRef.current.abort();
           abortControllerRef.current = null;
       }
-      // Force status back to idle immediately
       setState(prev => ({ ...prev, status: 'idle' }));
   };
 
   const selectChapter = (id: number) => {
     setState(prev => ({ ...prev, currentChapterId: id }));
-    // Mobile responsiveness: close sidebar on selection on small screens
     if (window.innerWidth < 768) {
       setSidebarOpen(false);
     }
@@ -209,24 +285,19 @@ const App: React.FC = () => {
     const chapter = state.chapters[chapterIndex];
     if (chapter.isDone || chapter.isGenerating) return;
 
-    // --- Build Context for Continuity ---
     const previousChapters = state.chapters.filter(c => c.isDone && c.id < chapterId);
-    
-    // 1. Summaries of all previous chapters
     const storySummaries = previousChapters
         .map(c => `Chapter ${c.id}: ${c.summary}`)
         .join("\n");
 
-    // 2. The ending of the immediately preceding chapter (for seamless transition)
-    let lastChapterEnding = "";
+    let previousChapterContent = "";
     if (previousChapters.length > 0) {
         const last = previousChapters[previousChapters.length - 1];
         if (last.id === chapterId - 1) {
-             lastChapterEnding = (last.content || "").slice(-2000);
+             previousChapterContent = (last.content || "").slice(-8000);
         }
     }
 
-    // Update state to generating
     setState(prev => {
       const newChapters = [...prev.chapters];
       newChapters[chapterIndex] = { ...chapter, isGenerating: true, content: '' };
@@ -235,11 +306,11 @@ const App: React.FC = () => {
 
     try {
       const stream = GeminiService.generateChapterStream(
-          settingsRef.current, // Use ref
+          settingsRef.current, 
           chapter, 
           storySummaries, 
-          lastChapterEnding,
-          state.characters, // Pass characters
+          previousChapterContent,
+          state.characters, 
           handleUsageUpdate
       );
       
@@ -249,7 +320,6 @@ const App: React.FC = () => {
         fullContent += chunk;
         setState(prev => {
           const nextChapters = [...prev.chapters];
-          // Determine index again in case state changed elsewhere (unlikely but safe)
           const idx = nextChapters.findIndex(c => c.id === chapterId);
           if (idx !== -1) {
             nextChapters[idx] = { 
@@ -261,12 +331,11 @@ const App: React.FC = () => {
         });
       }
 
-      // Generation complete, now generate summary
       let finalSummary = chapter.summary;
       try {
         const generatedSummary = await GeminiService.summarizeChapter(
           fullContent, 
-          settingsRef.current, // Use ref
+          settingsRef.current, 
           handleUsageUpdate
         );
         if (generatedSummary) {
@@ -276,21 +345,22 @@ const App: React.FC = () => {
         console.error("Failed to generate summary", err);
       }
 
-      // Mark as done and update summary
       setState(prev => {
-        const newChapters = [...prev.chapters];
-        const idx = newChapters.findIndex(c => c.id === chapterId);
+        const nextChapters = [...prev.chapters];
+        const idx = nextChapters.findIndex(c => c.id === chapterId);
         if (idx !== -1) {
-          newChapters[idx] = { 
-            ...newChapters[idx], 
+          nextChapters[idx] = { 
+            ...nextChapters[idx], 
             content: fullContent,
             summary: finalSummary,
             isGenerating: false, 
             isDone: true 
           };
         }
-        return { ...prev, chapters: newChapters };
+        return { ...prev, chapters: nextChapters };
       });
+      
+      handleManualSave();
 
     } catch (error: any) {
       console.error("Chapter generation error", error);
@@ -307,7 +377,6 @@ const App: React.FC = () => {
   };
 
   const handleAutoGenerate = async () => {
-    // Check if everything is already done
     if (state.chapters.every(c => c.isDone)) {
         if (window.confirm("所有章节已完成。要重新生成所有章节吗？\nAll chapters are done. Do you want to rewrite all?")) {
            handleRewriteAll();
@@ -315,38 +384,31 @@ const App: React.FC = () => {
         return;
     }
 
-    // Prepare context buffers
     let cumulativeSummaries = "";
     const alreadyDone = state.chapters.filter(c => c.isDone);
     cumulativeSummaries = alreadyDone.map(c => `Chapter ${c.id}: ${c.summary}`).join("\n");
     
-    // Initialize lastChapterEnding based on the last completed chapter
-    let lastChapterEnding = "";
+    let previousChapterContent = "";
     if (alreadyDone.length > 0) {
         const last = alreadyDone[alreadyDone.length - 1];
-        lastChapterEnding = (last.content || "").slice(-2000);
+        previousChapterContent = (last.content || "").slice(-8000);
     }
 
     for (let i = 0; i < state.chapters.length; i++) {
         const chapter = state.chapters[i];
 
-        // If chapter is already done, update our running context and skip
         if (chapter.isDone) {
-             // Update summaries
              if (!cumulativeSummaries.includes(`Chapter ${chapter.id}:`)) {
                  cumulativeSummaries += `\nChapter ${chapter.id}: ${chapter.summary}`;
              }
-             // Update ending for continuity
-             lastChapterEnding = (chapter.content || "").slice(-2000);
+             previousChapterContent = (chapter.content || "").slice(-8000);
              continue;
         }
 
-        // Add a delay between chapters to avoid rate limits (3 seconds)
         if (i > 0) {
             await new Promise(resolve => setTimeout(resolve, 3000)); 
         }
 
-        // Set state to generating
         setState(prev => {
             const nextChapters = [...prev.chapters];
             nextChapters[i] = { ...nextChapters[i], isGenerating: true };
@@ -356,11 +418,11 @@ const App: React.FC = () => {
         try {
             let fullContent = "";
             const stream = GeminiService.generateChapterStream(
-                settingsRef.current, // Use ref
+                settingsRef.current, 
                 chapter, 
                 cumulativeSummaries,
-                lastChapterEnding,
-                state.characters, // Pass characters
+                previousChapterContent,
+                state.characters, 
                 handleUsageUpdate
             );
             
@@ -373,14 +435,12 @@ const App: React.FC = () => {
                 });
             }
 
-             // Summarize
             let summary = chapter.summary;
             try {
-                 const genSummary = await GeminiService.summarizeChapter(fullContent, settingsRef.current, handleUsageUpdate); // Use ref
+                 const genSummary = await GeminiService.summarizeChapter(fullContent, settingsRef.current, handleUsageUpdate); 
                  if (genSummary) summary = genSummary;
             } catch (e) { console.error(e) }
 
-            // Mark done
             setState(prev => {
                 const nextChapters = [...prev.chapters];
                 nextChapters[i] = { 
@@ -393,20 +453,20 @@ const App: React.FC = () => {
                 return { ...prev, chapters: nextChapters };
             });
 
-            // Update context for next iteration
             cumulativeSummaries += `\nChapter ${chapter.id}: ${summary}`;
-            lastChapterEnding = fullContent.slice(-2000);
+            previousChapterContent = fullContent.slice(-8000);
+            
+            await handleManualSave();
 
         } catch (error: any) {
             console.error("Auto generation failed at chapter " + chapter.id, error);
-            // Critical: Ensure we turn off generating flag so user can try again
             setState(prev => {
                 const nextChapters = [...prev.chapters];
                 nextChapters[i] = { ...nextChapters[i], isGenerating: false };
                 return { ...prev, chapters: nextChapters };
             });
             alert(`Auto-generation paused at Chapter ${chapter.id}: ${error.message || "Network/API Error"}`);
-            break; // Stop the loop, allowing user to resume later
+            break; 
         }
     }
   };
@@ -414,7 +474,6 @@ const App: React.FC = () => {
   const handleRewriteAll = async () => {
     if (!window.confirm("确定要重写所有章节吗？这将覆盖现有内容。\nAre you sure you want to rewrite all chapters? This will overwrite existing content.")) return;
     
-    // Create a clean slate based on existing chapters
     const chaptersToRewrite = state.chapters.map(c => ({
         ...c, 
         content: '', 
@@ -424,34 +483,30 @@ const App: React.FC = () => {
         consistencyAnalysis: undefined
     }));
     
-    // Reset UI first
     setState(prev => ({ ...prev, chapters: chaptersToRewrite, currentChapterId: chaptersToRewrite[0].id }));
     
     let cumulativeSummaries = "";
-    let lastChapterEnding = "";
+    let previousChapterContent = "";
     
-    // Loop
     for (let i = 0; i < chaptersToRewrite.length; i++) {
         const chapterConfig = chaptersToRewrite[i]; 
         
         if (i > 0) await new Promise(resolve => setTimeout(resolve, 3000));
 
-        // Update status to generating
         setState(prev => {
             const nextChapters = [...prev.chapters];
             nextChapters[i] = { ...nextChapters[i], isGenerating: true };
             return { ...prev, chapters: nextChapters, currentChapterId: nextChapters[i].id };
         });
         
-        // Generate
         let fullContent = "";
         try {
             const stream = GeminiService.generateChapterStream(
-                settingsRef.current, // Use ref
+                settingsRef.current, 
                 chapterConfig, 
                 cumulativeSummaries,
-                lastChapterEnding,
-                state.characters, // Pass characters
+                previousChapterContent,
+                state.characters, 
                 handleUsageUpdate
             );
 
@@ -464,10 +519,8 @@ const App: React.FC = () => {
                 });
             }
             
-            // Summarize
-            const summary = await GeminiService.summarizeChapter(fullContent, settingsRef.current, handleUsageUpdate); // Use ref
+            const summary = await GeminiService.summarizeChapter(fullContent, settingsRef.current, handleUsageUpdate); 
             
-            // Mark done
             setState(prev => {
                 const nextChapters = [...prev.chapters];
                 nextChapters[i] = { 
@@ -481,7 +534,7 @@ const App: React.FC = () => {
             });
             
             cumulativeSummaries += `\nChapter ${chapterConfig.id}: ${summary}`;
-            lastChapterEnding = fullContent.slice(-2000);
+            previousChapterContent = fullContent.slice(-8000);
             
         } catch (e: any) {
             console.error(e);
@@ -494,6 +547,7 @@ const App: React.FC = () => {
             break; 
         }
     }
+    handleManualSave();
   };
 
   const handleConsistencyCheck = async () => {
@@ -509,9 +563,8 @@ const App: React.FC = () => {
         const chapter = state.chapters[i];
         if (!chapter.isDone || !chapter.content) continue;
 
-        const analysis = await GeminiService.checkConsistency(chapter.content, state.characters, settingsRef.current, handleUsageUpdate); // Use ref
+        const analysis = await GeminiService.checkConsistency(chapter.content, state.characters, settingsRef.current, handleUsageUpdate); 
         
-        // Update chapter with analysis result
         setState(prev => {
             const nextChapters = [...prev.chapters];
             nextChapters[i] = { ...nextChapters[i], consistencyAnalysis: analysis };
@@ -529,7 +582,6 @@ const App: React.FC = () => {
     const chapter = state.chapters.find(c => c.id === chapterId);
     if (!chapter || !chapter.consistencyAnalysis) return;
 
-    // Set UI to loading/generating for this specific chapter
     setState(prev => {
         const nextChapters = prev.chapters.map(c => 
             c.id === chapterId ? { ...c, isGenerating: true } : c
@@ -542,7 +594,7 @@ const App: React.FC = () => {
             chapter.content,
             state.characters,
             chapter.consistencyAnalysis,
-            settingsRef.current, // Use ref
+            settingsRef.current, 
             handleUsageUpdate
         );
 
@@ -568,8 +620,6 @@ const App: React.FC = () => {
         });
     }
   };
-
-  // --- Export Handlers ---
 
   const handleExportText = () => {
     const lines = [];
@@ -657,206 +707,237 @@ const App: React.FC = () => {
     setShowExportMenu(false);
   };
 
-
-  // --- Render Helpers ---
-
   const currentChapter = state.chapters.find(c => c.id === state.currentChapterId);
 
-  // --- Main Render ---
-
-  // 1. Initial Setup View
-  if (state.status === 'idle' || state.status === 'generating_outline') {
-    return (
-      <div className="h-full bg-gray-50 flex flex-col">
-        <header className="bg-white border-b border-gray-200 py-4 px-6 flex items-center justify-between shrink-0">
-          <div className="flex items-center space-x-2">
-            <Layout className="text-indigo-600 w-6 h-6" />
-            <h1 className="text-xl font-serif font-bold text-gray-800">DreamWeaver Novelist</h1>
-          </div>
-        </header>
-        <main className="flex-1 overflow-y-auto">
-          <SettingsForm 
+  // --- Main Render Content Logic ---
+  let mainContent;
+  
+  if (currentView === 'models') {
+      mainContent = (
+          <ModelConfigManager 
             settings={state.settings}
             onSettingsChange={handleSettingsChange}
-            onSubmit={generateOutlineAndCharacters}
-            onStop={handleStopOutlineGeneration}
-            isLoading={state.status === 'generating_outline'}
           />
-        </main>
-      </div>
-    );
+      );
+  } else if (currentView === 'prompts') {
+      mainContent = (
+          <PromptConfigManager 
+            settings={state.settings}
+            onSettingsChange={handleSettingsChange}
+          />
+      );
+  } else if (state.status === 'idle' || state.status === 'generating_outline') {
+      mainContent = (
+         <div className="flex-1 overflow-y-auto bg-gray-50 flex flex-col">
+            <header className="bg-white border-b border-gray-200 py-4 px-6 flex items-center justify-between shrink-0">
+                <div className="flex items-center space-x-2">
+                    <h1 className="text-xl font-serif font-bold text-gray-800">
+                        {state.settings.id ? '编辑设定 (Edit Settings)' : '新作品设定 (New Novel)'}
+                    </h1>
+                </div>
+            </header>
+            <main className="flex-1">
+                <SettingsForm 
+                    settings={state.settings}
+                    onSettingsChange={handleSettingsChange}
+                    onSubmit={generateOutlineAndCharacters}
+                    onStop={handleStopOutlineGeneration}
+                    isLoading={state.status === 'generating_outline'}
+                />
+            </main>
+        </div>
+      );
+  } else {
+      mainContent = (
+          <div className="flex flex-1 h-full overflow-hidden">
+                <div 
+                    className={`${
+                    sidebarOpen ? 'w-72 translate-x-0' : 'w-0 -translate-x-full'
+                    } bg-white border-r border-gray-200 transition-all duration-300 ease-in-out flex flex-col flex-shrink-0 relative z-20 h-full shadow-sm`}
+                >
+                    <div className="p-4 border-b border-gray-100 bg-gray-50 flex flex-col space-y-2">
+                        <div className="flex items-center justify-between">
+                            <h3 className="font-semibold text-gray-700 font-sans">目录 (Table of Contents)</h3>
+                            <button onClick={() => setSidebarOpen(false)} className="md:hidden p-1 text-gray-500">
+                                <ChevronRight className="rotate-180" />
+                            </button>
+                        </div>
+                        <div className="text-xs text-gray-500 bg-white px-2 py-1 rounded border border-gray-100 flex justify-between">
+                            <span>总字数 (Total):</span>
+                            <span className="font-mono font-medium">{totalWordCount}</span>
+                        </div>
+                    </div>
+                    
+                    <div className="px-4 py-2 border-b border-gray-100 bg-indigo-50/50">
+                        <div className="flex items-center justify-between text-[10px] text-gray-600">
+                            <div className="flex items-center space-x-1" title="Input Tokens">
+                                <Gauge size={10} className="text-indigo-500" />
+                                <span>In: {state.usage.inputTokens.toLocaleString()}</span>
+                            </div>
+                            <div className="flex items-center space-x-1" title="Output Tokens">
+                                <Gauge size={10} className="text-green-500" />
+                                <span>Out: {state.usage.outputTokens.toLocaleString()}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="px-4 py-3 border-b border-gray-100 bg-white shrink-0">
+                        <div className="flex items-center space-x-2 text-gray-700 mb-1">
+                            <BookOpen size={12} />
+                            <span className="text-xs font-bold">故事概要 (Premise)</span>
+                        </div>
+                        <p className="text-[10px] text-gray-500 leading-relaxed line-clamp-3 hover:line-clamp-none transition-all cursor-default" title={state.settings.premise}>
+                            {state.settings.premise}
+                        </p>
+                    </div>
+                    
+                    <div className="flex-1 overflow-y-auto py-2">
+                        {state.chapters.map((chapter) => (
+                            <button
+                            key={chapter.id}
+                            onClick={() => selectChapter(chapter.id)}
+                            className={`w-full text-left px-5 py-3 border-l-4 transition-colors ${
+                                state.currentChapterId === chapter.id
+                                ? 'bg-indigo-50 border-indigo-500'
+                                : 'border-transparent hover:bg-gray-50'
+                            }`}
+                            >
+                            <div className="flex items-start justify-between">
+                                <div className="overflow-hidden">
+                                <span className={`text-xs font-bold uppercase tracking-wider mb-0.5 block ${state.currentChapterId === chapter.id ? 'text-indigo-600' : 'text-gray-400'}`}>
+                                    第 {chapter.id} 章
+                                </span>
+                                <span className={`text-sm font-medium block truncate w-48 ${state.currentChapterId === chapter.id ? 'text-gray-900' : 'text-gray-700'}`}>
+                                    {chapter.title}
+                                </span>
+                                {chapter.content && (
+                                    <span className="text-[10px] text-gray-400 mt-0.5 block">
+                                        {getWordCount(chapter.content)} 字
+                                    </span>
+                                )}
+                                </div>
+                                <div className="mt-1 flex items-center space-x-1">
+                                {chapter.isGenerating ? (
+                                    <div className="w-4 h-4 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin"></div>
+                                ) : chapter.isDone ? (
+                                    <CheckCircle2 className="w-4 h-4 text-green-500" />
+                                ) : (
+                                    <Circle className="w-4 h-4 text-gray-300" />
+                                )}
+                                </div>
+                            </div>
+                            </button>
+                        ))}
+                    </div>
+
+                    <div className="p-4 border-t border-gray-100 bg-gray-50 space-y-3">
+                        <div className="grid grid-cols-4 gap-1">
+                            <button 
+                            onClick={() => setShowCharacterModal(true)}
+                            className="flex flex-col items-center justify-center text-gray-600 hover:text-indigo-600 text-[10px] font-medium py-2 rounded-lg transition-colors border border-transparent hover:bg-gray-100"
+                            title="查看人物 (View Characters)"
+                            >
+                            <Users size={16} className="mb-1" />
+                            <span>人物</span>
+                            </button>
+
+                            <button 
+                            onClick={handleConsistencyCheck}
+                            disabled={isCheckingConsistency}
+                            className={`flex flex-col items-center justify-center text-[10px] font-medium py-2 rounded-lg transition-colors border border-transparent hover:bg-orange-50 ${isCheckingConsistency ? 'text-gray-300' : 'text-orange-600 hover:text-orange-800'}`}
+                            title="一键校验人物一致性 (Check Consistency)"
+                            >
+                            <FileSearch size={16} className={`mb-1 ${isCheckingConsistency ? 'animate-pulse' : ''}`} />
+                            <span>校验</span>
+                            </button>
+
+                            <button 
+                            onClick={handleAutoGenerate}
+                            className="flex flex-col items-center justify-center text-indigo-600 hover:text-indigo-800 text-[10px] font-medium py-2 rounded-lg transition-colors border border-transparent hover:bg-indigo-50"
+                            title="自动生成剩余章节"
+                            >
+                            <Sparkles size={16} className="mb-1" />
+                            <span>生成</span>
+                            </button>
+                            
+                            <button 
+                            onClick={() => setShowExportMenu(!showExportMenu)}
+                            className="flex flex-col items-center justify-center text-gray-600 hover:text-indigo-600 text-[10px] font-medium py-2 rounded-lg transition-colors border border-transparent hover:bg-gray-100 relative"
+                            title="导出 (Export)"
+                            >
+                            <Download size={16} className="mb-1" />
+                            <span>导出</span>
+                            {showExportMenu && (
+                            <div className="absolute bottom-full right-0 w-32 mb-2 bg-white rounded-lg shadow-lg border border-gray-200 overflow-hidden z-50">
+                                <div onClick={(e) => { e.stopPropagation(); handleExportText(); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center space-x-2 text-xs text-gray-700 cursor-pointer">
+                                <FileText size={14} />
+                                <span>Text (.txt)</span>
+                                </div>
+                                <div onClick={(e) => { e.stopPropagation(); handleExportPDF(); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center space-x-2 text-xs text-gray-700 border-t border-gray-100 cursor-pointer">
+                                <Printer size={14} />
+                                <span>PDF (.pdf)</span>
+                                </div>
+                            </div>
+                            )}
+                            </button>
+                        </div>
+                        
+                        <div className="text-xs pt-2 border-t border-gray-200 flex justify-between items-center text-gray-400">
+                            <p className="truncate font-medium text-gray-500 max-w-[120px]" title={state.settings.title}>{state.settings.title}</p>
+                            <button 
+                                onClick={handleManualSave}
+                                disabled={isSaving}
+                                className="flex items-center space-x-1 hover:text-emerald-600 transition-colors"
+                                title="Manual Save"
+                            >
+                            {isSaving ? <Loader2 size={12} className="animate-spin" /> : <Database size={12} />}
+                            <span className="text-[10px]">{isSaving ? 'Saving...' : 'Save'}</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                {!sidebarOpen && (
+                <button 
+                    onClick={() => setSidebarOpen(true)}
+                    className="absolute left-4 top-4 z-30 p-2 bg-white rounded-full shadow-md text-gray-600 hover:text-indigo-600 transition-colors"
+                >
+                    <Menu size={20} />
+                </button>
+                )}
+
+                <Reader 
+                    chapter={currentChapter}
+                    settings={state.settings}
+                    appearance={appearance}
+                    onAppearanceChange={handleAppearanceChange}
+                    onGenerate={generateChapterContent}
+                    onBack={handleCreateNew}
+                    onUpdateContent={handleUpdateChapter}
+                    characters={state.characters}
+                />
+          </div>
+      );
   }
 
-  // 2. Editor / Reader View
   return (
-    <div className="flex h-screen bg-gray-100 overflow-hidden">
+    <div className="flex h-screen w-screen overflow-hidden bg-gray-100">
       
-      {/* Sidebar - Chapter Outline */}
-      <div 
-        className={`${
-          sidebarOpen ? 'w-80 translate-x-0' : 'w-0 -translate-x-full'
-        } bg-white border-r border-gray-200 transition-all duration-300 ease-in-out flex flex-col absolute md:relative z-20 h-full shadow-xl md:shadow-none`}
-      >
-        <div className="p-4 border-b border-gray-100 bg-gray-50 flex flex-col space-y-2">
-          <div className="flex items-center justify-between">
-             <h3 className="font-semibold text-gray-700 font-sans">目录 (Table of Contents)</h3>
-             <button onClick={() => setSidebarOpen(false)} className="md:hidden p-1 text-gray-500">
-                <ChevronRight className="rotate-180" />
-             </button>
-          </div>
-          <div className="text-xs text-gray-500 bg-white px-2 py-1 rounded border border-gray-100 flex justify-between">
-             <span>总字数 (Total):</span>
-             <span className="font-mono font-medium">{totalWordCount}</span>
-          </div>
-        </div>
-        
-        {/* Token Stats in Sidebar */}
-        <div className="px-4 py-2 border-b border-gray-100 bg-indigo-50/50">
-           <div className="flex items-center justify-between text-[10px] text-gray-600">
-               <div className="flex items-center space-x-1" title="Input Tokens">
-                   <Gauge size={10} className="text-indigo-500" />
-                   <span>In: {state.usage.inputTokens.toLocaleString()}</span>
-               </div>
-               <div className="flex items-center space-x-1" title="Output Tokens">
-                   <Gauge size={10} className="text-green-500" />
-                   <span>Out: {state.usage.outputTokens.toLocaleString()}</span>
-               </div>
-           </div>
-        </div>
+      <AppSidebar 
+        novels={savedNovels}
+        currentNovelId={state.settings.id}
+        onSelect={handleLoadNovel}
+        onCreate={handleCreateNew}
+        onDelete={handleDeleteNovel}
+        settings={state.settings}
+        onSettingsChange={handleSettingsChange}
+        currentView={currentView}
+        onNavigate={setCurrentView}
+      />
 
-        {/* Premise Section */}
-        <div className="px-4 py-3 border-b border-gray-100 bg-white shrink-0">
-             <div className="flex items-center space-x-2 text-gray-700 mb-1">
-                 <BookOpen size={12} />
-                 <span className="text-xs font-bold">故事概要 (Premise)</span>
-             </div>
-             <p className="text-[10px] text-gray-500 leading-relaxed line-clamp-3 hover:line-clamp-none transition-all cursor-default" title={state.settings.premise}>
-                 {state.settings.premise}
-             </p>
-        </div>
-        
-        <div className="flex-1 overflow-y-auto py-2">
-          {state.chapters.map((chapter) => (
-            <button
-              key={chapter.id}
-              onClick={() => selectChapter(chapter.id)}
-              className={`w-full text-left px-5 py-3 border-l-4 transition-colors ${
-                state.currentChapterId === chapter.id
-                  ? 'bg-indigo-50 border-indigo-500'
-                  : 'border-transparent hover:bg-gray-50'
-              }`}
-            >
-              <div className="flex items-start justify-between">
-                <div className="overflow-hidden">
-                   <span className={`text-xs font-bold uppercase tracking-wider mb-0.5 block ${state.currentChapterId === chapter.id ? 'text-indigo-600' : 'text-gray-400'}`}>
-                    第 {chapter.id} 章
-                  </span>
-                  <span className={`text-sm font-medium block truncate w-48 ${state.currentChapterId === chapter.id ? 'text-gray-900' : 'text-gray-700'}`}>
-                    {chapter.title}
-                  </span>
-                  {chapter.content && (
-                      <span className="text-[10px] text-gray-400 mt-0.5 block">
-                          {getWordCount(chapter.content)} 字
-                      </span>
-                  )}
-                </div>
-                <div className="mt-1 flex items-center space-x-1">
-                   {/* Status Indicator */}
-                   {chapter.isGenerating ? (
-                      <div className="w-4 h-4 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin"></div>
-                   ) : chapter.isDone ? (
-                      <CheckCircle2 className="w-4 h-4 text-green-500" />
-                   ) : (
-                      <Circle className="w-4 h-4 text-gray-300" />
-                   )}
-                </div>
-              </div>
-            </button>
-          ))}
-        </div>
-
-        <div className="p-4 border-t border-gray-100 bg-gray-50 space-y-3">
-          <div className="grid grid-cols-4 gap-1">
-             <button 
-              onClick={() => setShowCharacterModal(true)}
-              className="flex flex-col items-center justify-center text-gray-600 hover:text-indigo-600 text-[10px] font-medium py-2 rounded-lg transition-colors border border-transparent hover:bg-gray-100"
-              title="查看人物 (View Characters)"
-            >
-              <Users size={16} className="mb-1" />
-              <span>人物</span>
-            </button>
-
-             <button 
-              onClick={handleConsistencyCheck}
-              disabled={isCheckingConsistency}
-              className={`flex flex-col items-center justify-center text-[10px] font-medium py-2 rounded-lg transition-colors border border-transparent hover:bg-orange-50 ${isCheckingConsistency ? 'text-gray-300' : 'text-orange-600 hover:text-orange-800'}`}
-              title="一键校验人物一致性 (Check Consistency)"
-            >
-              <FileSearch size={16} className={`mb-1 ${isCheckingConsistency ? 'animate-pulse' : ''}`} />
-              <span>校验</span>
-            </button>
-
-             <button 
-              onClick={handleAutoGenerate}
-              className="flex flex-col items-center justify-center text-indigo-600 hover:text-indigo-800 text-[10px] font-medium py-2 rounded-lg transition-colors border border-transparent hover:bg-indigo-50"
-              title="自动生成剩余章节"
-            >
-              <Sparkles size={16} className="mb-1" />
-              <span>生成</span>
-            </button>
-            
-            <button 
-              onClick={() => setShowExportMenu(!showExportMenu)}
-              className="flex flex-col items-center justify-center text-gray-600 hover:text-indigo-600 text-[10px] font-medium py-2 rounded-lg transition-colors border border-transparent hover:bg-gray-100 relative"
-              title="导出 (Export)"
-            >
-              <Download size={16} className="mb-1" />
-              <span>导出</span>
-              {showExportMenu && (
-              <div className="absolute bottom-full right-0 w-32 mb-2 bg-white rounded-lg shadow-lg border border-gray-200 overflow-hidden z-50">
-                <div onClick={(e) => { e.stopPropagation(); handleExportText(); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center space-x-2 text-xs text-gray-700 cursor-pointer">
-                  <FileText size={14} />
-                  <span>Text (.txt)</span>
-                </div>
-                <div onClick={(e) => { e.stopPropagation(); handleExportPDF(); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center space-x-2 text-xs text-gray-700 border-t border-gray-100 cursor-pointer">
-                  <Printer size={14} />
-                  <span>PDF (.pdf)</span>
-                </div>
-              </div>
-            )}
-            </button>
-          </div>
-          
-          <div className="text-xs text-gray-400 pt-2 border-t border-gray-200">
-            <p className="truncate font-medium text-gray-500">{state.settings.title}</p>
-          </div>
-        </div>
-      </div>
-
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col h-full relative">
-        
-        {/* Toggle Sidebar Button (when closed) */}
-        {!sidebarOpen && (
-          <button 
-            onClick={() => setSidebarOpen(true)}
-            className="absolute left-4 top-4 z-30 p-2 bg-white rounded-full shadow-md text-gray-600 hover:text-indigo-600 transition-colors"
-          >
-            <Menu size={20} />
-          </button>
-        )}
-
-        {/* Reader Component */}
-        <Reader 
-          chapter={currentChapter}
-          settings={state.settings}
-          appearance={appearance}
-          onAppearanceChange={handleAppearanceChange}
-          onGenerate={generateChapterContent}
-          onBack={handleBackToHome}
-          onUpdateContent={handleUpdateChapter}
-          characters={state.characters} // Pass characters
-        />
+      {/* Main Workspace */}
+      <div className="flex-1 flex flex-col h-full relative overflow-hidden">
+        {mainContent}
         
         {/* Modals */}
         <CharacterList 
@@ -864,7 +945,7 @@ const App: React.FC = () => {
             isOpen={showCharacterModal} 
             onClose={() => setShowCharacterModal(false)}
             onUpdateCharacters={handleUpdateCharacters}
-            settings={state.settings} // Pass settings for context
+            settings={state.settings} 
         />
         <ConsistencyReport 
             chapters={state.chapters}
