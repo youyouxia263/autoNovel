@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type, Schema, GenerateContentResponse } from "@google/genai";
-import { NovelSettings, Chapter, ModelProvider, Character, GrammarIssue, Genre } from "../types";
+import { NovelSettings, Chapter, ModelProvider, Character, GrammarIssue } from "../types";
 import { DEFAULT_PROMPTS, PROMPT_KEYS, fillPrompt } from "./promptTemplates";
 
 const GEMINI_API_KEY = process.env.API_KEY || '';
@@ -285,44 +285,47 @@ async function fetchOpenAICompatible(url: string, apiKey: string, model: string,
     });
 }
 
-// --- Genre Specific Instructions ---
-const getGenreSpecificInstructions = (genres: Genre[]) => {
+// --- Helper: Construct Genre String from Tomato Novel Settings ---
+const buildGenreString = (settings: NovelSettings): string => {
+    let genreStr = `主分类: ${settings.mainCategory}`;
+    if (settings.themes && settings.themes.length > 0) {
+        genreStr += `, 主题: ${settings.themes.join('/')}`;
+    }
+    if (settings.roles && settings.roles.length > 0) {
+        genreStr += `, 角色: ${settings.roles.join('/')}`;
+    }
+    if (settings.plots && settings.plots.length > 0) {
+        genreStr += `, 情节: ${settings.plots.join('/')}`;
+    }
+    return genreStr;
+};
+
+// --- Genre Specific Instructions (Updated for new system) ---
+const getGenreSpecificInstructions = (settings: NovelSettings) => {
+    // We focus on the Main Category for broad guidance
+    const mainCat = settings.mainCategory;
     let instructions = "";
-    genres.forEach(genre => {
-        switch (genre) {
-            case Genre.TimeTravel:
-                instructions += `\nGENRE GUIDE - TIME TRAVEL (穿越):\n- **Core Trope**: A protagonist from modern times (or a different future) is transported to a historical or alternate world setting.\n- **Key Elements**: Contrast between modern knowledge and archaic setting.\n`;
-                break;
-            case Genre.Rebirth:
-                instructions += `\nGENRE GUIDE - REBIRTH (重生):\n- **Core Trope**: Protagonist wakes up in their younger body.\n- **Key Elements**: "Foreknowledge", second chances, revenge.\n`;
-                break;
-            case Genre.Wuxia:
-                instructions += `\nGENRE GUIDE - WUXIA/XIANXIA (武侠/仙侠):\n- **Key Elements**: Cultivation, martial arts sects, immortality, Jianghu.\n`;
-                break;
-            case Genre.Urban:
-                instructions += `\nGENRE GUIDE - URBAN (都市):\n- **Key Elements**: Modern cities, career success, business empires, social dynamics.\n`;
-                break;
-            case Genre.System:
-                instructions += `\nGENRE GUIDE - SYSTEM (系统):\n- **Key Elements**: Game-like interface, tasks, rewards, statistics.\n`;
-                break;
-            case Genre.Suspense:
-            case Genre.Thriller:
-            case Genre.Mystery:
-                if (!instructions.includes("GENRE GUIDE - SUSPENSE/MYSTERY")) {
-                    instructions += `\nGENRE GUIDE - SUSPENSE/MYSTERY:\n- **Key Elements**: High stakes, hidden truths, unreliable narration.\n`;
-                }
-                break;
-            case Genre.Romance:
-                instructions += `\nGENRE GUIDE - ROMANCE (言情):\n- **Key Elements**: Romantic relationship development, emotional growth, intimacy.\n`;
-                break;
-             case Genre.Fantasy:
-                instructions += `\nGENRE GUIDE - FANTASY (玄幻):\n- **Key Elements**: Magic, supernatural elements, world-building.\n`;
-                break;
-             case Genre.SciFi:
-                instructions += `\nGENRE GUIDE - SCI-FI (科幻):\n- **Key Elements**: Futuristic technology, space/time travel, AI.\n`;
-                break;
-        }
-    });
+
+    // General logic mapping
+    if (mainCat.includes('玄幻') || mainCat.includes('仙侠') || mainCat.includes('武侠')) {
+         instructions += `\nGENRE GUIDE - EASTERN FANTASY/CULTIVATION (玄幻/仙侠/武侠):\n- **Key Elements**: Cultivation ranks, martial arts sects, immortality, ruthlessness, strength rules.\n`;
+    } else if (mainCat.includes('都市') || mainCat.includes('现实') || mainCat.includes('职场')) {
+         instructions += `\nGENRE GUIDE - URBAN/MODERN (都市/现实):\n- **Key Elements**: Modern cities, career success, social dynamics, realistic relationships.\n`;
+    } else if (mainCat.includes('言情') || mainCat.includes('婚恋')) {
+         instructions += `\nGENRE GUIDE - ROMANCE (言情):\n- **Key Elements**: Relationship development, emotional growth, intimacy, psychological tension.\n`;
+    } else if (mainCat.includes('悬疑') || mainCat.includes('灵异') || mainCat.includes('惊悚')) {
+         instructions += `\nGENRE GUIDE - SUSPENSE/THRILLER (悬疑/灵异):\n- **Key Elements**: High stakes, hidden truths, atmosphere of fear or mystery, unreliable narration.\n`;
+    } else if (mainCat.includes('科幻') || mainCat.includes('未来世界')) {
+         instructions += `\nGENRE GUIDE - SCI-FI (科幻):\n- **Key Elements**: Futuristic technology, space/time travel, AI, societal changes.\n`;
+    } else if (mainCat.includes('历史') || mainCat.includes('军事')) {
+         instructions += `\nGENRE GUIDE - HISTORY (历史/军事):\n- **Key Elements**: Historical accuracy or plausible alternate history, warfare, kingdom building, strategy.\n`;
+    } else if (mainCat.includes('游戏')) {
+         instructions += `\nGENRE GUIDE - GAMING (网游):\n- **Key Elements**: Game mechanics, levels, skills, e-sports, virtual vs reality.\n`;
+    }
+
+    // Add generic instruction to respect tags
+    instructions += `\nIMPORTANT: Integrate the selected themes (${settings.themes?.join(',') || 'none'}) and plot elements (${settings.plots?.join(',') || 'none'}) naturally into the narrative. If the role is '${settings.roles?.join(',') || 'none'}', ensure the protagonist acts accordingly.`;
+
     return instructions;
 };
 
@@ -350,7 +353,7 @@ export const expandText = async (
       ? "OUTPUT LANGUAGE: Chinese (Simplified)."
       : "OUTPUT LANGUAGE: English.";
     
-    const genreString = settings.genre.join(', ');
+    const genreString = buildGenreString(settings);
     const template = getPromptTemplate(PROMPT_KEYS.EXPAND_TEXT, settings);
     
     const promptText = fillPrompt(template, {
@@ -396,11 +399,11 @@ export const expandText = async (
 
 export const generateCharacterConcepts = async (settings: NovelSettings, onUsage?: (u: {input: number, output: number}) => void, count: number = 4): Promise<string> => {
     const language = settings.language;
-    const genres = settings.genre;
+    const genreString = buildGenreString(settings);
     const langInstruction = language === 'zh' ? "OUTPUT LANGUAGE: Chinese (Simplified)." : "OUTPUT LANGUAGE: English.";
     
     const template = getPromptTemplate(PROMPT_KEYS.GENERATE_CHARACTERS, settings);
-    const genreInstructions = getGenreSpecificInstructions(settings.genre);
+    const genreInstructions = getGenreSpecificInstructions(settings);
     const worldSettingContext = settings.worldSetting ? `WORLD SETTING: ${settings.worldSetting}` : ``;
     const charContext = settings.mainCharacters 
         ? `USER PROVIDED CHARACTERS (MUST INCLUDE/REFINE THESE): ${settings.mainCharacters}`
@@ -408,7 +411,7 @@ export const generateCharacterConcepts = async (settings: NovelSettings, onUsage
 
     const promptText = fillPrompt(template, {
         title: settings.title,
-        genre: genres.join(', '),
+        genre: genreString,
         premise: settings.premise,
         language: langInstruction,
         genreGuide: genreInstructions,
@@ -443,12 +446,13 @@ export const generateSingleCharacter = async (settings: NovelSettings, existingC
     const language = settings.language;
     const langInstruction = language === 'zh' ? "OUTPUT LANGUAGE: Chinese (Simplified)." : "OUTPUT LANGUAGE: English.";
     const existingNames = existingCharacters.map(c => c.name).join(', ');
+    const genreString = buildGenreString(settings);
     
     const template = getPromptTemplate(PROMPT_KEYS.GENERATE_SINGLE_CHARACTER, settings);
     const promptText = fillPrompt(template, {
         title: settings.title,
         existingNames: existingNames,
-        genre: settings.genre.join(', '),
+        genre: genreString,
         language: langInstruction,
         premise: settings.premise
     });
@@ -489,23 +493,27 @@ export const generateSingleCharacter = async (settings: NovelSettings, existingC
 
 export const generateWorldSetting = async (settings: NovelSettings, onUsage?: (u: {input: number, output: number}) => void): Promise<string> => {
     const language = settings.language;
-    const genres = settings.genre;
+    const genreString = buildGenreString(settings);
     
     const langInstruction = language === 'zh' ? "OUTPUT LANGUAGE: Chinese (Simplified)." : "OUTPUT LANGUAGE: English.";
   
     let specificPrompt = "";
-    if (genres.includes(Genre.System)) {
+    if (settings.themes.includes("系统")) {
         specificPrompt = "Define the 'System': What is its name? What are the core functions? What are the penalties?";
-    } else if (genres.includes(Genre.Fantasy) || genres.includes(Genre.Wuxia)) {
-        specificPrompt = "Define the Magic/Cultivation System: Power levels? Factions?";
+    } else if (settings.mainCategory.includes('玄幻') || settings.mainCategory.includes('仙侠')) {
+        specificPrompt = "Define the Cultivation/Magic System: Power levels (ranks), Factions/Sects, Divine Beasts?";
+    } else if (settings.mainCategory.includes('游戏') || settings.themes.includes('网游')) {
+        specificPrompt = "Define the Game World: VRMMO mechanics, classes, major guilds?";
+    } else if (settings.themes.includes("末世")) {
+        specificPrompt = "Define the Apocalypse: What caused it? Zombies/Monsters? Special abilities?";
     } else {
-        specificPrompt = "Define the World Setting: Time period, location, social rules.";
+        specificPrompt = "Define the World Setting: Time period, location, social rules, power structure.";
     }
   
     const template = getPromptTemplate(PROMPT_KEYS.GENERATE_WORLD, settings);
     const promptText = fillPrompt(template, {
         title: settings.title,
-        genre: genres.join(', '),
+        genre: genreString,
         language: langInstruction,
         premise: settings.premise,
         specificPrompt: specificPrompt
@@ -539,8 +547,7 @@ export const generateWorldSetting = async (settings: NovelSettings, onUsage?: (u
 
 export const generatePremise = async (title: string, currentPremise: string, settings: NovelSettings, onUsage?: (u: {input: number, output: number}) => void): Promise<string> => {
     const language = settings.language;
-    const genres = settings.genre;
-    const genreString = genres.join(' + ');
+    const genreString = buildGenreString(settings);
     const langInstruction = language === 'zh' ? "OUTPUT LANGUAGE: Chinese (Simplified)." : "OUTPUT LANGUAGE: English.";
     const task = currentPremise && currentPremise.trim().length > 0
       ? `Expand idea: "${currentPremise}" into a plot summary.`
@@ -579,8 +586,8 @@ export const generatePremise = async (title: string, currentPremise: string, set
 };
 
 export const summarizeChapter = async (content: string, settings: NovelSettings, onUsage?: (u: {input: number, output: number}) => void): Promise<string> => {
-   const genres = settings.genre.join(', ');
-   const promptText = `Task: Summarize chapter. Genres: ${genres}. Content: ${content.slice(0, 15000)}. Length: 3-5 sentences.`;
+   const genreString = buildGenreString(settings);
+   const promptText = `Task: Summarize chapter. Genres: ${genreString}. Content: ${content.slice(0, 15000)}. Length: 3-5 sentences.`;
    const systemInstruction = getSystemInstruction("You are an expert editor.", settings);
    
    if (settings.provider === 'gemini') {
@@ -609,8 +616,8 @@ export const generateOutline = async (settings: NovelSettings, signal?: AbortSig
     ? "OUTPUT LANGUAGE: Chinese (Simplified)." 
     : "OUTPUT LANGUAGE: English.";
   
-  const genreInstructions = getGenreSpecificInstructions(settings.genre);
-  const genreString = settings.genre.join(' + ');
+  const genreInstructions = getGenreSpecificInstructions(settings);
+  const genreString = buildGenreString(settings);
   const isOneShot = settings.novelType === 'short' || settings.chapterCount === 1;
 
   const formatInstruction = isOneShot
@@ -715,7 +722,8 @@ export const generateOutline = async (settings: NovelSettings, signal?: AbortSig
 
 export const generateCharacters = async (settings: NovelSettings, signal?: AbortSignal, onUsage?: (u: {input: number, output: number}) => void, count: number = 4): Promise<Character[]> => {
   const languageInstruction = settings.language === 'zh' ? "OUTPUT LANGUAGE: Chinese (Simplified)." : "OUTPUT LANGUAGE: English.";
-  const genreInstructions = getGenreSpecificInstructions(settings.genre);
+  const genreInstructions = getGenreSpecificInstructions(settings);
+  const genreString = buildGenreString(settings);
   const worldSettingContext = settings.worldSetting ? `WORLD SETTING: ${settings.worldSetting}` : ``;
   
   const charContext = settings.mainCharacters 
@@ -725,7 +733,7 @@ export const generateCharacters = async (settings: NovelSettings, signal?: Abort
   const template = getPromptTemplate(PROMPT_KEYS.GENERATE_CHARACTERS, settings);
   const promptText = fillPrompt(template, {
       title: settings.title,
-      genre: settings.genre.join(', '),
+      genre: genreString,
       premise: settings.premise,
       language: languageInstruction,
       genreGuide: genreInstructions,
@@ -946,7 +954,7 @@ export const generateChapterStream = async function* (
 ) {
     const languageInstruction = settings.language === 'zh' ? "IMPORTANT: Write in Chinese (Simplified)." : "IMPORTANT: Write in English.";
     const styleInstructions = getStyleInstructions(settings);
-    const genreInstructions = getGenreSpecificInstructions(settings.genre);
+    const genreInstructions = getGenreSpecificInstructions(settings);
     const isOneShot = settings.novelType === 'short' || settings.chapterCount === 1;
     let task = `Write Chapter ${chapter.id}: "${chapter.title}".`;
     if (isOneShot) task = `Write a COMPLETE, COHERENT short story "${settings.title}" with a TIGHT plot. Chapter title: "${chapter.title}". Ensure the narrative arc is fully resolved within this text.`;

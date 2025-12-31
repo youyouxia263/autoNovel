@@ -1,18 +1,4 @@
 
-export enum Genre {
-  Suspense = 'Suspense',
-  Romance = 'Romance',
-  Thriller = 'Thriller',
-  Mystery = 'Mystery',
-  Fantasy = 'Fantasy',
-  SciFi = 'Sci-Fi',
-  TimeTravel = 'TimeTravel', // 穿越
-  Rebirth = 'Rebirth',       // 重生
-  Urban = 'Urban',           // 都市
-  Wuxia = 'Wuxia',           // 武侠/仙侠
-  System = 'System'          // 系统
-}
-
 export type Language = 'zh' | 'en';
 export type NovelType = 'long' | 'short';
 
@@ -45,17 +31,30 @@ export interface ModelConfig {
   createdAt: Date;
 }
 
+// Tomato Novel Classification Types
+export interface TagOption {
+    id: string;
+    label: string;
+}
+
 export interface NovelSettings {
   id?: string; // UUID for persistence
   title: string;
   premise: string;
-  genre: Genre[]; 
+  
+  // New Classification System
+  mainCategory: string; // Subject (Genre) - Single Select
+  themes: string[];     // World/Core - Select 1-3
+  roles: string[];      // Character Attributes - Select 1-2
+  plots: string[];      // Plot/Vibe - Select 1-3
+
   novelType: NovelType;
   targetWordCount: number;
   chapterCount: number;
   language: Language;
   worldSetting?: string;
   mainCharacters?: string; 
+  
   // Model Configuration (Active Session)
   provider: ModelProvider;
   baseUrl?: string; 

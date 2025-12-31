@@ -1,21 +1,27 @@
+
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { NovelState, NovelSettings, Genre, AppearanceSettings, Chapter, Character } from './types';
+import { NovelState, NovelSettings, AppearanceSettings, Chapter, Character } from './types';
 import * as GeminiService from './services/geminiService';
 import { DAOFactory } from './services/dao'; 
 import SettingsForm from './components/SettingsForm';
 import Reader from './components/Reader';
 import CharacterList from './components/CharacterList';
 import ConsistencyReport from './components/ConsistencyReport';
-import AppSidebar from './components/AppSidebar';
+import AppSidebar, { ViewType } from './components/AppSidebar';
 import ModelConfigManager from './components/ModelConfigManager';
 import PromptConfigManager from './components/PromptConfigManager';
-import { Menu, ChevronRight, CheckCircle2, Circle, Download, FileText, Printer, Sparkles, Users, FileSearch, BookOpen, Gauge, Database, Loader2 } from 'lucide-react';
+import StorageConfigManager from './components/StorageConfigManager';
+import LanguageConfigManager from './components/LanguageConfigManager';
+import { Menu, ChevronRight, CheckCircle2, Circle, Download, FileText, Printer, Sparkles, Users, FileSearch, BookOpen, Gauge, Database, Loader2, Cloud, Clock } from 'lucide-react';
 
 // Initial default settings factory
 const getDefaultSettings = (): NovelSettings => ({
   title: '',
   premise: '',
-  genre: [Genre.Suspense, Genre.Romance], 
+  mainCategory: '',
+  themes: [],
+  roles: [],
+  plots: [],
   novelType: 'long',
   targetWordCount: 10000, 
   chapterCount: 5,
@@ -53,7 +59,7 @@ const getWordCount = (text: string) => {
 
 const App: React.FC = () => {
   // --- View State ---
-  const [currentView, setCurrentView] = useState<'workspace' | 'models' | 'prompts'>('workspace');
+  const [currentView, setCurrentView] = useState<ViewType>('workspace');
 
   // --- Novel State ---
   const [state, setState] = useState<NovelState>({
@@ -73,6 +79,7 @@ const App: React.FC = () => {
   const [showConsistencyReport, setShowConsistencyReport] = useState(false);
   const [isCheckingConsistency, setIsCheckingConsistency] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [lastAutoSaveTime, setLastAutoSaveTime] = useState<Date | null>(null);
   
   // Library State
   const [savedNovels, setSavedNovels] = useState<{id: string, title: string, updatedAt: Date}[]>([]);
@@ -80,6 +87,7 @@ const App: React.FC = () => {
   // Refs
   const settingsRef = useRef(state.settings);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     settingsRef.current = state.settings;
@@ -114,7 +122,18 @@ const App: React.FC = () => {
                   loaded.status = 'ready';
               }
               
+              // Helper to migrate old settings if they exist
+              const loadedSettings = loaded.settings as any;
+              if (loadedSettings.genre && Array.isArray(loadedSettings.genre) && !loadedSettings.mainCategory) {
+                 // Migration: If old generic 'genre' array exists but no 'mainCategory', map it simply.
+                 loaded.settings.mainCategory = loadedSettings.genre[0] || '玄幻';
+                 loaded.settings.themes = [];
+                 loaded.settings.roles = [];
+                 loaded.settings.plots = [];
+              }
+              
               setState(loaded);
+              setLastAutoSaveTime(new Date());
               setSidebarOpen(true);
               setCurrentView('workspace'); // Ensure view switches to workspace
           }
@@ -135,27 +154,54 @@ const App: React.FC = () => {
       }
   };
 
-  const handleManualSave = async () => {
-      if (!state.settings.title) return; 
-      setIsSaving(true);
+  const performSave = async (currentState: NovelState, isAuto: boolean = false) => {
+      if (!currentState.settings.title) return; 
+      
+      if (!isAuto) setIsSaving(true);
+
       try {
-          const dao = DAOFactory.getDAO(state.settings);
-          const id = await dao.saveNovel(state);
-          if (state.settings.id !== id) {
+          const dao = DAOFactory.getDAO(currentState.settings);
+          const id = await dao.saveNovel(currentState);
+          
+          // If we just saved a new novel for the first time, update state with ID
+          if (currentState.settings.id !== id) {
               setState(prev => ({
                   ...prev,
                   settings: { ...prev.settings, id }
               }));
           }
+          
+          setLastAutoSaveTime(new Date());
           await refreshLibrary();
-          await new Promise(r => setTimeout(r, 500));
+          
       } catch (e) {
           console.error("Save failed", e);
-          alert("保存失败 (Save Failed): " + (e as Error).message);
+          if (!isAuto) alert("保存失败 (Save Failed): " + (e as Error).message);
       } finally {
-          setIsSaving(false);
+          if (!isAuto) setIsSaving(false);
       }
   };
+
+  const handleManualSave = () => performSave(state, false);
+
+  // Auto-save Effect
+  useEffect(() => {
+      // Don't auto-save if we haven't started (no title) or are in initial setup
+      if (!state.settings.title) return;
+
+      if (autoSaveTimerRef.current) {
+          clearTimeout(autoSaveTimerRef.current);
+      }
+
+      // Debounce auto-save by 3 seconds
+      autoSaveTimerRef.current = setTimeout(() => {
+          performSave(state, true);
+      }, 3000);
+
+      return () => {
+          if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+      };
+  }, [state]);
 
   const handleCreateNew = () => {
       if (state.status === 'ready' && state.chapters.some(c => c.isDone || c.content)) {
@@ -177,6 +223,7 @@ const App: React.FC = () => {
         status: 'idle',
         usage: { inputTokens: 0, outputTokens: 0 }
       });
+      setLastAutoSaveTime(null);
       setSidebarOpen(true);
       setCurrentView('workspace');
   };
@@ -244,7 +291,8 @@ const App: React.FC = () => {
         currentChapterId: newChapters[0]?.id || null
       }));
       
-      setTimeout(() => handleManualSave(), 1000);
+      // Initial save after generation
+      setTimeout(() => performSave(state, true), 1000);
 
     } catch (error: any) {
       if (error.name === 'AbortError' || error.message?.includes('Aborted')) {
@@ -360,7 +408,8 @@ const App: React.FC = () => {
         return { ...prev, chapters: nextChapters };
       });
       
-      handleManualSave();
+      // Auto-save after chapter generation
+      setTimeout(() => performSave(state, true), 100);
 
     } catch (error: any) {
       console.error("Chapter generation error", error);
@@ -456,7 +505,8 @@ const App: React.FC = () => {
             cumulativeSummaries += `\nChapter ${chapter.id}: ${summary}`;
             previousChapterContent = fullContent.slice(-8000);
             
-            await handleManualSave();
+            // Auto save after each chapter in auto-mode
+            await performSave(state, true);
 
         } catch (error: any) {
             console.error("Auto generation failed at chapter " + chapter.id, error);
@@ -547,7 +597,7 @@ const App: React.FC = () => {
             break; 
         }
     }
-    handleManualSave();
+    performSave(state, true);
   };
 
   const handleConsistencyCheck = async () => {
@@ -712,16 +762,30 @@ const App: React.FC = () => {
   // --- Main Render Content Logic ---
   let mainContent;
   
-  if (currentView === 'models') {
+  if (currentView === 'settings-model') {
       mainContent = (
           <ModelConfigManager 
             settings={state.settings}
             onSettingsChange={handleSettingsChange}
           />
       );
-  } else if (currentView === 'prompts') {
+  } else if (currentView === 'settings-prompt') {
       mainContent = (
           <PromptConfigManager 
+            settings={state.settings}
+            onSettingsChange={handleSettingsChange}
+          />
+      );
+  } else if (currentView === 'settings-storage') {
+      mainContent = (
+          <StorageConfigManager
+            settings={state.settings}
+            onSettingsChange={handleSettingsChange}
+          />
+      );
+  } else if (currentView === 'settings-language') {
+      mainContent = (
+          <LanguageConfigManager
             settings={state.settings}
             onSettingsChange={handleSettingsChange}
           />
@@ -882,17 +946,25 @@ const App: React.FC = () => {
                             </button>
                         </div>
                         
-                        <div className="text-xs pt-2 border-t border-gray-200 flex justify-between items-center text-gray-400">
-                            <p className="truncate font-medium text-gray-500 max-w-[120px]" title={state.settings.title}>{state.settings.title}</p>
-                            <button 
-                                onClick={handleManualSave}
-                                disabled={isSaving}
-                                className="flex items-center space-x-1 hover:text-emerald-600 transition-colors"
-                                title="Manual Save"
-                            >
-                            {isSaving ? <Loader2 size={12} className="animate-spin" /> : <Database size={12} />}
-                            <span className="text-[10px]">{isSaving ? 'Saving...' : 'Save'}</span>
-                            </button>
+                        <div className="text-xs pt-2 border-t border-gray-200 flex flex-col space-y-2">
+                             <div className="flex justify-between items-center text-gray-400">
+                                <p className="truncate font-medium text-gray-500 max-w-[120px]" title={state.settings.title}>{state.settings.title}</p>
+                                <button 
+                                    onClick={handleManualSave}
+                                    disabled={isSaving}
+                                    className="flex items-center space-x-1 hover:text-emerald-600 transition-colors"
+                                    title="Manual Save"
+                                >
+                                {isSaving ? <Loader2 size={12} className="animate-spin" /> : <Database size={12} />}
+                                <span className="text-[10px]">{isSaving ? 'Saving...' : 'Save'}</span>
+                                </button>
+                             </div>
+                             {lastAutoSaveTime && (
+                                 <div className="flex items-center justify-end space-x-1 text-[9px] text-gray-400">
+                                     <Clock size={10} />
+                                     <span>Auto-saved: {lastAutoSaveTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                 </div>
+                             )}
                         </div>
                     </div>
                 </div>
