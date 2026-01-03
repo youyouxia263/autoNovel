@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Plus, Book, Trash2, FileText, Layout, Settings, Cpu, MessageSquareQuote, ChevronDown, ChevronRight, Database, Globe } from 'lucide-react';
+import { Plus, Book, Trash2, FileText, Layout, Settings, Cpu, MessageSquareQuote, ChevronDown, ChevronRight, Database, Globe, Layers } from 'lucide-react';
 import { NovelSettings } from '../types';
 
 interface SavedNovel {
@@ -29,6 +29,12 @@ const AppSidebar: React.FC<AppSidebarProps> = ({ novels, currentNovelId, onSelec
   
   const formatDate = (date: Date) => {
     return new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric' }).format(date);
+  };
+
+  const handleDeleteClick = (e: React.MouseEvent, id: string) => {
+      e.stopPropagation();
+      e.preventDefault();
+      onDelete(id);
   };
 
   return (
@@ -95,11 +101,8 @@ const AppSidebar: React.FC<AppSidebarProps> = ({ novels, currentNovelId, onSelec
                 </div>
                 
                 <button
-                    onClick={(e) => {
-                    e.stopPropagation();
-                    onDelete(novel.id);
-                    }}
-                    className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-500/20 text-gray-500 hover:text-red-400 rounded transition-all"
+                    onClick={(e) => handleDeleteClick(e, novel.id)}
+                    className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-500/20 text-gray-500 hover:text-red-400 rounded transition-all z-10"
                     title="Delete"
                 >
                     <Trash2 size={14} />
@@ -180,8 +183,8 @@ const AppSidebar: React.FC<AppSidebarProps> = ({ novels, currentNovelId, onSelec
       
       {/* Footer Info */}
       <div className="p-4 border-t border-gray-800 text-[10px] text-gray-600 text-center flex justify-between items-center">
-         <span>v1.2.0</span>
-         <span className="flex items-center gap-1 opacity-50">Alpha</span>
+         <span>v1.4.0</span>
+         <span className="flex items-center gap-1 opacity-50">Vol. Support</span>
       </div>
     </div>
   );

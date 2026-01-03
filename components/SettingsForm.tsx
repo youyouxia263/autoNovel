@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { NovelSettings, Language, WritingTone, WritingStyle, NarrativePerspective, NovelType } from '../types';
-import { BookOpen, PenTool, Sparkles, Globe, Wand2, Loader2, Feather, Eye, Mic2, ScrollText, BookCopy, Globe2, Dna, Check, Square, Users, Tag } from 'lucide-react';
+import { BookOpen, PenTool, Sparkles, Globe, Wand2, Loader2, Feather, Eye, Mic2, ScrollText, BookCopy, Globe2, Dna, Check, Square, Users, Tag, Layers } from 'lucide-react';
 import { generatePremise, generateWorldSetting, expandText, generateCharacterConcepts } from '../services/geminiService';
 
 interface SettingsFormProps {
@@ -577,14 +577,19 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
              <input
               type="number"
               min={1}
-              max={100}
+              max={3000}
               value={settings.chapterCount}
               onChange={(e) => handleChange('chapterCount', parseInt(e.target.value))}
               disabled={settings.novelType === 'short'}
               className={`w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none ${settings.novelType === 'short' ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : ''}`}
              />
-             <p className="text-[10px] text-gray-500 mt-1">
-                {settings.novelType === 'short' ? '单章节' : '建议 20 章+'}
+             <p className="text-[10px] text-gray-500 mt-1 flex items-center gap-1">
+                {settings.chapterCount > 100 && <Layers size={10} className="text-indigo-500" />}
+                {settings.novelType === 'short' 
+                    ? '单章节' 
+                    : settings.chapterCount > 100 
+                        ? '将自动启用分卷管理 (Volume Structure Enabled)' 
+                        : '建议 20 章+'}
              </p>
           </div>
         </div>

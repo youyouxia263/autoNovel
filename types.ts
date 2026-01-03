@@ -94,6 +94,10 @@ export interface Chapter {
   title: string;
   summary: string;
   content: string;
+  // Volume Support
+  volumeId?: number;
+  volumeTitle?: string;
+  
   isGenerating: boolean;
   isDone: boolean;
   consistencyAnalysis?: string;
