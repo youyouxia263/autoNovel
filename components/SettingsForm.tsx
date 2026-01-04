@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { NovelSettings, Language, WritingTone, WritingStyle, NarrativePerspective, NovelType } from '../types';
-import { BookOpen, PenTool, Sparkles, Globe, Wand2, Loader2, Feather, Eye, Mic2, ScrollText, BookCopy, Globe2, Dna, Check, Square, Users, Tag, Layers } from 'lucide-react';
+import { BookOpen, PenTool, Sparkles, Globe, Wand2, Loader2, Feather, Eye, Mic2, ScrollText, BookCopy, Globe2, Dna, Check, Square, Users, Tag, Layers, Type } from 'lucide-react';
 import { generatePremise, generateWorldSetting, expandText, generateCharacterConcepts } from '../services/geminiService';
 
 interface SettingsFormProps {
@@ -62,14 +62,16 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
         onSettingsChange({
             ...settings,
             novelType: 'short',
-            targetWordCount: 60000, 
+            targetWordCount: 10000, 
+            targetChapterWordCount: 10000, // Short story is typically 1 chapter
             chapterCount: 1 
         });
     } else {
         onSettingsChange({
             ...settings,
             novelType: 'long',
-            targetWordCount: 100000,
+            targetWordCount: 60000,
+            targetChapterWordCount: 3000,
             chapterCount: 20
         });
     }
@@ -572,25 +574,39 @@ const SettingsForm: React.FC<SettingsFormProps> = ({ settings, onSettingsChange,
             </div>
           </div>
           
-           <div>
-             <label className="block text-sm font-medium text-gray-700 mb-1">章节数量 (Chapters)</label>
-             <input
-              type="number"
-              min={1}
-              max={3000}
-              value={settings.chapterCount}
-              onChange={(e) => handleChange('chapterCount', parseInt(e.target.value))}
-              disabled={settings.novelType === 'short'}
-              className={`w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none ${settings.novelType === 'short' ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : ''}`}
-             />
-             <p className="text-[10px] text-gray-500 mt-1 flex items-center gap-1">
-                {settings.chapterCount > 100 && <Layers size={10} className="text-indigo-500" />}
-                {settings.novelType === 'short' 
-                    ? '单章节' 
-                    : settings.chapterCount > 100 
-                        ? '将自动启用分卷管理 (Volume Structure Enabled)' 
-                        : '建议 20 章+'}
-             </p>
+           <div className="grid grid-cols-2 gap-4">
+             <div>
+                 <label className="block text-sm font-medium text-gray-700 mb-1">章节数量 (Chapters)</label>
+                 <input
+                  type="number"
+                  min={1}
+                  max={3000}
+                  value={settings.chapterCount}
+                  onChange={(e) => handleChange('chapterCount', parseInt(e.target.value))}
+                  disabled={settings.novelType === 'short'}
+                  className={`w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none ${settings.novelType === 'short' ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : ''}`}
+                 />
+                 <p className="text-[10px] text-gray-500 mt-1 flex items-center gap-1">
+                    {settings.chapterCount > 100 && <Layers size={10} className="text-indigo-500" />}
+                    {settings.novelType === 'short' ? '单章节' : settings.chapterCount > 100 ? 'Auto Volume' : '建议 20 章+'}
+                 </p>
+             </div>
+             
+             <div>
+                 <label className="block text-sm font-medium text-gray-700 mb-1">单章字数 (Words/Ch)</label>
+                 <input
+                  type="number"
+                  min={100}
+                  step={100}
+                  value={settings.targetChapterWordCount || 3000}
+                  onChange={(e) => handleChange('targetChapterWordCount', parseInt(e.target.value))}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                 />
+                 <p className="text-[10px] text-gray-500 mt-1 flex items-center gap-1">
+                    <Type size={10} />
+                    目标生成长度
+                 </p>
+             </div>
           </div>
         </div>
 

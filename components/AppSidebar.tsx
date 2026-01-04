@@ -82,7 +82,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({ novels, currentNovelId, onSelec
             novels.map((novel) => (
                 <div
                 key={novel.id}
-                className={`group flex items-center justify-between p-2.5 rounded-lg cursor-pointer transition-all duration-200 ${
+                className={`group flex items-center justify-between p-2.5 rounded-lg cursor-pointer transition-all duration-200 relative ${
                     currentView === 'workspace' && currentNovelId === novel.id
                     ? 'bg-gray-800 text-white shadow-sm ring-1 ring-gray-700'
                     : 'hover:bg-gray-800/50 hover:text-gray-100'
@@ -102,7 +102,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({ novels, currentNovelId, onSelec
                 
                 <button
                     onClick={(e) => handleDeleteClick(e, novel.id)}
-                    className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-500/20 text-gray-500 hover:text-red-400 rounded transition-all z-10"
+                    className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-1.5 hover:bg-red-500/20 text-gray-500 hover:text-red-400 rounded transition-all z-10 relative"
                     title="Delete"
                 >
                     <Trash2 size={14} />

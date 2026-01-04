@@ -49,7 +49,8 @@ export interface NovelSettings {
   plots: string[];      // Plot/Vibe - Select 1-3
 
   novelType: NovelType;
-  targetWordCount: number;
+  targetWordCount: number; // Kept for backward compatibility/Total estimation
+  targetChapterWordCount?: number; // Target words per chapter
   chapterCount: number;
   language: Language;
   worldSetting?: string;

@@ -1,6 +1,7 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { AppearanceSettings, Chapter, NovelSettings, GrammarIssue, Character } from '../types';
-import { Type, AlignLeft, AlignJustify, Moon, Sun, Monitor, ArrowUpDown, Home, ChevronRight, Edit3, Save, X, Sparkles, Loader2, AlertTriangle, FileText, BookOpen, Copy, Check, SpellCheck, PenLine, FileCode } from 'lucide-react';
+import { Type, AlignLeft, AlignJustify, Moon, Sun, Monitor, ArrowUpDown, Home, ChevronRight, Edit3, Save, X, Sparkles, Loader2, AlertTriangle, FileText, BookOpen, Copy, Check, SpellCheck, PenLine, FileCode, RefreshCw } from 'lucide-react';
 import { continueWriting, checkGrammar, autoCorrectGrammar } from '../services/geminiService';
 import GrammarReport from './GrammarReport';
 
@@ -10,6 +11,7 @@ interface ReaderProps {
   appearance: AppearanceSettings;
   onAppearanceChange: (newSettings: Partial<AppearanceSettings>) => void;
   onGenerate: () => void;
+  onRewrite: () => void;
   onBack: () => void;
   onUpdateContent: (id: number, content: string) => void;
   characters?: Character[]; // New prop
@@ -21,6 +23,7 @@ const Reader: React.FC<ReaderProps> = ({
   appearance, 
   onAppearanceChange, 
   onGenerate, 
+  onRewrite,
   onBack,
   onUpdateContent,
   characters = []
@@ -53,7 +56,7 @@ const Reader: React.FC<ReaderProps> = ({
 
   // Auto-scroll to bottom when AI is writing (streaming) or editing
   useEffect(() => {
-    if (isAiWriting) {
+    if (isAiWriting || (chapter && chapter.isGenerating)) {
         requestAnimationFrame(() => {
              // If in read mode (likely), scroll the div
              if (contentEndRef.current) {
@@ -65,7 +68,7 @@ const Reader: React.FC<ReaderProps> = ({
             }
         });
     }
-  }, [streamingContent, editContent, isAiWriting]);
+  }, [streamingContent, editContent, isAiWriting, chapter?.isGenerating]);
 
   const handleStartEdit = () => {
     if (!chapter) return;
@@ -230,11 +233,37 @@ const Reader: React.FC<ReaderProps> = ({
     );
   }
 
-  const wordCount = getWordCount(isEditing ? editContent : chapter.content);
+  const currentText = isEditing ? editContent : (chapter.content || '');
+  const displayWordCount = getWordCount(currentText + streamingContent);
+  const targetWords = settings.targetWordCount && settings.novelType === 'short' 
+      ? settings.targetWordCount 
+      : 4000; // Default per chapter target for long novels
+  const progressPercent = Math.min(100, Math.round((displayWordCount / targetWords) * 100));
+  const isBusy = isAiWriting || chapter.isGenerating;
 
   return (
     <div className={`flex-1 flex flex-col h-full overflow-hidden transition-colors duration-300 ${getContainerThemeClasses()}`}>
       
+      {/* Progress Bar (Visible when writing) */}
+      <div className="h-1 bg-transparent w-full relative">
+          {isBusy && (
+              <div 
+                className="absolute inset-0 bg-indigo-600 transition-all duration-300 ease-out animate-pulse" 
+                style={{ width: `${progressPercent}%` }}
+              />
+          )}
+      </div>
+
+      {/* Floating Status Indicator (When writing) */}
+      {isBusy && (
+          <div className="absolute top-16 left-1/2 -translate-x-1/2 z-50 bg-white/90 backdrop-blur border border-indigo-100 shadow-lg px-4 py-2 rounded-full flex items-center gap-3 animate-in fade-in slide-in-from-top-4">
+              <Loader2 className="w-4 h-4 text-indigo-600 animate-spin" />
+              <span className="text-xs font-semibold text-indigo-700">
+                  AI 正在创作中... ({progressPercent}%)
+              </span>
+          </div>
+      )}
+
       {/* Toolbar */}
       <div className={`h-14 flex items-center justify-between px-6 border-b shrink-0 transition-colors duration-300 ${
         appearance.theme === 'dark' ? 'bg-gray-900 border-gray-800' : 
@@ -310,7 +339,7 @@ const Reader: React.FC<ReaderProps> = ({
                 <button onClick={() => onAppearanceChange({ theme: 'dark' })} className={`p-1.5 rounded-md ${appearance.theme === 'dark' ? 'bg-gray-800 shadow-sm text-indigo-400' : 'text-gray-400'}`}><Moon size={14} /></button>
                 </div>
 
-                {chapter.content && !chapter.isGenerating && (
+                {(chapter.content || isBusy) && (
                     <>
                     <div className="h-4 w-px bg-current opacity-20 mx-2"></div>
                     
@@ -339,7 +368,7 @@ const Reader: React.FC<ReaderProps> = ({
 
                      <button
                         onClick={handleGrammarCheck}
-                        disabled={isCheckingGrammar}
+                        disabled={isCheckingGrammar || isBusy}
                         className={`p-1.5 rounded-md hover:bg-black/5 transition-colors ${isCheckingGrammar ? 'text-indigo-400 animate-pulse' : 'text-gray-500 hover:text-indigo-600'}`}
                         title="Check Grammar"
                     >
@@ -347,18 +376,31 @@ const Reader: React.FC<ReaderProps> = ({
                     </button>
 
                     <button 
+                        onClick={onRewrite}
+                        disabled={isBusy}
+                        className="p-1.5 rounded-md hover:bg-black/5 text-gray-500 hover:text-red-600 transition-colors relative group"
+                        title="Rewrite Chapter"
+                    >
+                        <RefreshCw size={16} />
+                         <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 bg-black/80 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
+                            Rewrite
+                        </span>
+                    </button>
+
+                    <button 
                         onClick={handleAiContinue}
-                        disabled={isAiWriting}
-                        className="ml-2 flex items-center space-x-1 bg-purple-50 text-purple-700 border border-purple-200 px-3 py-1.5 rounded-md text-xs font-medium hover:bg-purple-100 transition-colors shadow-sm"
+                        disabled={isBusy}
+                        className="ml-2 flex items-center space-x-1 bg-purple-50 text-purple-700 border border-purple-200 px-3 py-1.5 rounded-md text-xs font-medium hover:bg-purple-100 transition-colors shadow-sm disabled:opacity-50"
                         title="AI 续写 (Continue Writing)"
                     >
-                        <Sparkles size={14} />
+                        {isBusy ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
                         <span className="hidden sm:inline">AI 续写</span>
                     </button>
 
                     <button 
                         onClick={handleStartEdit}
-                        className="ml-2 flex items-center space-x-1 bg-indigo-600 text-white px-3 py-1.5 rounded-md text-xs font-medium hover:bg-indigo-700 transition-colors shadow-sm"
+                        disabled={isBusy}
+                        className="ml-2 flex items-center space-x-1 bg-indigo-600 text-white px-3 py-1.5 rounded-md text-xs font-medium hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-50"
                     >
                         <Edit3 size={14} />
                         <span>编辑</span>
@@ -420,17 +462,20 @@ const Reader: React.FC<ReaderProps> = ({
                    
                    {/* Streaming Content (Visual Indicator) */}
                    {streamingContent && (
-                        <span className={`inline relative ${
-                            appearance.theme === 'dark' ? 'text-indigo-300 bg-indigo-900/30' : 'text-indigo-700 bg-indigo-50'
+                        <span className={`inline relative font-serif italic ${
+                            appearance.theme === 'dark' ? 'text-indigo-300' : 'text-indigo-700'
                         } transition-colors duration-200`}>
                             {streamingContent}
-                            <span className="inline-block w-2 h-4 ml-1 align-middle bg-indigo-500 animate-pulse rounded-sm"></span>
+                            <span className="inline-block w-1.5 h-5 ml-0.5 align-middle bg-indigo-500 animate-pulse"></span>
                         </span>
                    )}
                    
                    {/* Fallback cursor if just waiting */}
                    {(chapter.isGenerating || isAiWriting) && !streamingContent && (
-                      <span className="inline-block w-2 h-4 ml-1 bg-current animate-pulse">|</span>
+                      <div className="flex flex-col items-center justify-center py-8 space-y-3 opacity-50">
+                          <Loader2 className="w-8 h-8 animate-spin text-indigo-500" />
+                          <p className="text-xs font-mono">Thinking...</p>
+                      </div>
                    )}
                    <div ref={contentEndRef} />
                 </div>

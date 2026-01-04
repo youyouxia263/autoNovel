@@ -12,25 +12,44 @@ export interface INovelDAO {
   // Model Config Methods
   saveModelConfig(config: ModelConfig): Promise<string>;
   listModelConfigs(): Promise<ModelConfig[]>;
+  getModelConfig(id: string): Promise<ModelConfig | null>;
   deleteModelConfig(id: string): Promise<void>;
 }
 
 // --- Local SQLite-like Adapter (Using IndexedDB) ---
 class LocalDAO implements INovelDAO {
+  private static instance: LocalDAO;
   private dbName = "DreamWeaverDB";
-  private dbVersion = 2; // Incremented version for new store
+  private dbVersion = 2; 
   private db: IDBDatabase | null = null;
+  private initPromise: Promise<void> | null = null;
+
+  // Private constructor to enforce singleton
+  private constructor() {}
+
+  public static getInstance(): LocalDAO {
+      if (!LocalDAO.instance) {
+          LocalDAO.instance = new LocalDAO();
+      }
+      return LocalDAO.instance;
+  }
 
   async init(): Promise<void> {
     if (this.db) return;
+    if (this.initPromise) return this.initPromise;
 
-    return new Promise((resolve, reject) => {
+    this.initPromise = new Promise((resolve, reject) => {
       const request = indexedDB.open(this.dbName, this.dbVersion);
 
-      request.onerror = () => reject("Database failed to open");
+      request.onerror = () => {
+          this.initPromise = null;
+          reject("Database failed to open");
+      };
 
       request.onsuccess = (event: any) => {
         this.db = event.target.result;
+        // Don't clear initPromise here immediately if we want to return it, 
+        // but since we await it, it's fine.
         resolve();
       };
 
@@ -50,6 +69,8 @@ class LocalDAO implements INovelDAO {
         }
       };
     });
+    
+    return this.initPromise;
   }
 
   async saveNovel(state: NovelState): Promise<string> {
@@ -154,6 +175,17 @@ class LocalDAO implements INovelDAO {
       });
   }
 
+  async getModelConfig(id: string): Promise<ModelConfig | null> {
+      if (!this.db) await this.init();
+      return new Promise((resolve, reject) => {
+          const tx = this.db!.transaction("model_configs", "readonly");
+          const store = tx.objectStore("model_configs");
+          const request = store.get(id);
+          request.onsuccess = () => resolve(request.result || null);
+          request.onerror = () => reject(request.error);
+      });
+  }
+
   async deleteModelConfig(id: string): Promise<void> {
       if (!this.db) await this.init();
       const tx = this.db!.transaction("model_configs", "readwrite");
@@ -207,6 +239,10 @@ class MySQLDAO implements INovelDAO {
   async listModelConfigs(): Promise<ModelConfig[]> {
       return [];
   }
+
+  async getModelConfig(id: string): Promise<ModelConfig | null> {
+      return null;
+  }
   
   async deleteModelConfig(id: string): Promise<void> {}
 }
@@ -217,6 +253,6 @@ export class DAOFactory {
         if (settings.storage.type === 'mysql') {
             return new MySQLDAO(settings.storage);
         }
-        return new LocalDAO();
+        return LocalDAO.getInstance();
     }
 }

@@ -12,10 +12,10 @@ import ModelConfigManager from './components/ModelConfigManager';
 import PromptConfigManager from './components/PromptConfigManager';
 import StorageConfigManager from './components/StorageConfigManager';
 import LanguageConfigManager from './components/LanguageConfigManager';
-import { Menu, ChevronRight, CheckCircle2, Circle, Download, FileText, Printer, Sparkles, Users, FileSearch, BookOpen, Gauge, Database, Loader2, Cloud, Clock, Layers, ChevronDown } from 'lucide-react';
+import { Menu, ChevronRight, CheckCircle2, Circle, Download, FileText, Printer, Sparkles, Users, FileSearch, BookOpen, Gauge, Database, Loader2, Clock, Layers, ChevronDown } from 'lucide-react';
 
-// Initial default settings factory
-const getDefaultSettings = (): NovelSettings => ({
+// Initial default settings factory (Base)
+const getBaseDefaultSettings = (): NovelSettings => ({
   title: '',
   premise: '',
   mainCategory: '',
@@ -23,8 +23,9 @@ const getDefaultSettings = (): NovelSettings => ({
   roles: [],
   plots: [],
   novelType: 'long',
-  targetWordCount: 10000, 
-  chapterCount: 5,
+  targetWordCount: 60000, 
+  targetChapterWordCount: 3000,
+  chapterCount: 20,
   language: 'zh', 
   provider: 'gemini',
   apiKey: '',
@@ -38,6 +39,32 @@ const getDefaultSettings = (): NovelSettings => ({
   storage: { type: 'sqlite' },
   customPrompts: {}
 });
+
+// Async helper to get settings merged with persisted user preference for model
+const createDefaultSettings = async (): Promise<NovelSettings> => {
+    const base = getBaseDefaultSettings();
+    try {
+        const activeModelId = localStorage.getItem('active_model_config_id');
+        if (activeModelId) {
+            // We use the default DAO (SQLite) to fetch preferences because model configs are stored there locally usually
+            const dao = DAOFactory.getDAO(base); 
+            const modelConfig = await dao.getModelConfig(activeModelId);
+            if (modelConfig) {
+                return {
+                    ...base,
+                    provider: modelConfig.provider,
+                    apiKey: modelConfig.apiKey,
+                    modelName: modelConfig.modelName,
+                    baseUrl: modelConfig.baseUrl,
+                    maxOutputTokens: modelConfig.maxOutputTokens
+                };
+            }
+        }
+    } catch (e) {
+        console.warn("Failed to load active model preference", e);
+    }
+    return base;
+};
 
 const DEFAULT_APPEARANCE: AppearanceSettings = {
   fontFamily: 'font-serif',
@@ -101,10 +128,12 @@ const groupChaptersByVolume = (chapters: Chapter[]): VolumeGroup[] => {
 const App: React.FC = () => {
   // --- View State ---
   const [currentView, setCurrentView] = useState<ViewType>('workspace');
+  // Used to force full re-mount of SettingsForm
+  const [resetKey, setResetKey] = useState(0);
 
   // --- Novel State ---
   const [state, setState] = useState<NovelState>({
-    settings: getDefaultSettings(),
+    settings: getBaseDefaultSettings(), // Start with base, sync later
     chapters: [],
     characters: [],
     currentChapterId: null,
@@ -112,6 +141,28 @@ const App: React.FC = () => {
     consistencyReport: null,
     usage: { inputTokens: 0, outputTokens: 0 }
   });
+
+  // Initial load of model preferences
+  useEffect(() => {
+     const init = async () => {
+         // Only apply defaults if we are in a 'fresh' state (no ID)
+         if (!state.settings.id) {
+             const defaults = await createDefaultSettings();
+             setState(prev => ({
+                 ...prev,
+                 settings: {
+                     ...prev.settings,
+                     provider: defaults.provider,
+                     apiKey: defaults.apiKey,
+                     modelName: defaults.modelName,
+                     baseUrl: defaults.baseUrl,
+                     maxOutputTokens: defaults.maxOutputTokens
+                 }
+             }));
+         }
+     };
+     init();
+  }, []);
 
   const [appearance, setAppearance] = useState<AppearanceSettings>(DEFAULT_APPEARANCE);
   const [sidebarOpen, setSidebarOpen] = useState(true); 
@@ -131,7 +182,7 @@ const App: React.FC = () => {
   // Refs
   const settingsRef = useRef(state.settings);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     settingsRef.current = state.settings;
@@ -141,7 +192,7 @@ const App: React.FC = () => {
   
   const refreshLibrary = async () => {
       // Use current settings for DAO connection info if possible, or defaults
-      const dao = DAOFactory.getDAO(state.settings.storage.type === 'mysql' ? state.settings : getDefaultSettings());
+      const dao = DAOFactory.getDAO(state.settings.storage.type === 'mysql' ? state.settings : getBaseDefaultSettings());
       try {
           const novels = await dao.listNovels();
           setSavedNovels(novels.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()));
@@ -201,7 +252,7 @@ const App: React.FC = () => {
           await refreshLibrary();
           
           if (state.settings.id === id) {
-              handleCreateNew();
+              handleCreateNew(true); // Force create new without confirmation
           }
       } catch (e: any) {
           console.error("Delete failed", e);
@@ -258,8 +309,8 @@ const App: React.FC = () => {
       };
   }, [state]);
 
-  const handleCreateNew = () => {
-      if (state.status === 'ready' && state.chapters.some(c => c.isDone || c.content)) {
+  const handleCreateNew = async (force: boolean = false) => {
+      if (!force && state.status === 'ready' && state.chapters.some(c => c.isDone || c.content)) {
         if (!window.confirm("Creating new novel will close current one. Unsaved progress might be lost (Auto-save is on). Continue?")) {
             return;
         }
@@ -270,9 +321,11 @@ const App: React.FC = () => {
           abortControllerRef.current = null;
       }
 
+      const defaults = await createDefaultSettings();
+
       // Completely reset state
       setState({
-        settings: getDefaultSettings(),
+        settings: defaults,
         chapters: [],
         characters: [],
         currentChapterId: null,
@@ -280,6 +333,7 @@ const App: React.FC = () => {
         consistencyReport: null,
         usage: { inputTokens: 0, outputTokens: 0 }
       });
+      setResetKey(prev => prev + 1); // Force re-mount of SettingsForm
       setExpandedVolumes({});
       setLastAutoSaveTime(null);
       setSidebarOpen(true);
@@ -391,7 +445,7 @@ const App: React.FC = () => {
       setExpandedVolumes(prev => ({ ...prev, [volumeId]: !prev[volumeId] }));
   };
 
-  const generateChapterContent = async () => {
+  const generateChapterContent = async (force: boolean = false) => {
     const chapterId = state.currentChapterId;
     if (!chapterId) return;
 
@@ -399,7 +453,14 @@ const App: React.FC = () => {
     if (chapterIndex === -1) return;
 
     const chapter = state.chapters[chapterIndex];
-    if (chapter.isDone || chapter.isGenerating) return;
+    
+    if (!force && (chapter.isDone || chapter.isGenerating)) return;
+
+    if (force) {
+        if (!window.confirm("确定要重写本章吗？现有内容将被覆盖。\nAre you sure you want to rewrite this chapter? Current content will be lost.")) {
+            return;
+        }
+    }
 
     // --- Prepare Context ---
     const previousChapters = state.chapters.filter(c => c.isDone && c.id < chapterId);
@@ -417,7 +478,12 @@ const App: React.FC = () => {
 
     setState(prev => {
       const newChapters = [...prev.chapters];
-      newChapters[chapterIndex] = { ...chapter, isGenerating: true, content: '' };
+      newChapters[chapterIndex] = { 
+          ...chapter, 
+          isGenerating: true, 
+          content: force ? '' : (chapter.content || ''), 
+          isDone: false 
+      };
       return { ...prev, chapters: newChapters };
     });
 
@@ -450,7 +516,17 @@ const App: React.FC = () => {
       }
 
       // --- Phase 2: Length Enforcement Loop ---
-      const TARGET_WORD_COUNT = 4000;
+      // Determine dynamic target based on settings
+      let TARGET_WORD_COUNT = state.settings.targetChapterWordCount || 3000;
+      if (!state.settings.targetChapterWordCount) {
+          // Fallback logic if explicit chapter target is missing
+          if (state.settings.novelType === 'short') {
+              TARGET_WORD_COUNT = state.settings.targetWordCount || 5000;
+          } else if (state.settings.targetWordCount && state.settings.chapterCount) {
+              TARGET_WORD_COUNT = Math.max(1500, Math.floor(state.settings.targetWordCount / state.settings.chapterCount));
+          }
+      }
+
       let currentWordCount = getWordCount(fullContent);
       let loops = 0;
       const MAX_LOOPS = 5; // Prevent infinite loops
@@ -538,8 +614,6 @@ const App: React.FC = () => {
   };
 
   const handleAutoGenerate = async () => {
-    // Logic mostly similar to generateChapterContent, but iterated.
-    
     if (state.chapters.every(c => c.isDone)) {
         if (window.confirm("所有章节已完成。要重新生成所有章节吗？\nAll chapters are done. Do you want to rewrite all?")) {
            handleRewriteAll();
@@ -577,14 +651,15 @@ const App: React.FC = () => {
         setState(prev => {
             const nextChapters = [...prev.chapters];
             nextChapters[i] = { ...nextChapters[i], isGenerating: true };
-            return { ...prev, chapters: nextChapters, currentChapterId: nextChapters[i].id };
+            return { ...prev, chapters: nextChapters };
         });
 
         // Retry logic for Auto-Gen loop
         let retries = 0;
         const MAX_RETRIES = 1;
+        let success = false;
 
-        while (retries <= MAX_RETRIES) {
+        while (!success && retries <= MAX_RETRIES) {
             try {
                 let fullContent = "";
                 let stream = GeminiService.generateChapterStream(
@@ -606,7 +681,16 @@ const App: React.FC = () => {
                 }
 
                 // --- Extension Loop for Auto Gen ---
-                const TARGET_WORD_COUNT = 4000;
+                let TARGET_WORD_COUNT = state.settings.targetChapterWordCount || 3000;
+                if (!state.settings.targetChapterWordCount) {
+                    // Fallback
+                    if (state.settings.novelType === 'short') {
+                        TARGET_WORD_COUNT = state.settings.targetWordCount || 5000;
+                    } else if (state.settings.targetWordCount && state.settings.chapterCount) {
+                        TARGET_WORD_COUNT = Math.max(1500, Math.floor(state.settings.targetWordCount / state.settings.chapterCount));
+                    }
+                }
+
                 let currentWordCount = getWordCount(fullContent);
                 let loops = 0;
                 while (currentWordCount < TARGET_WORD_COUNT && loops < 5) {
@@ -655,21 +739,21 @@ const App: React.FC = () => {
                 previousChapterContent = fullContent.slice(-8000);
                 
                 await performSave(state, true);
-                break; // Success, exit retry loop
+                success = true;
 
             } catch (error: any) {
                 console.error("Auto generation failed at chapter " + chapter.id, error);
                 
-                // Check for rate limit or network error
-                const isRateLimit = error.message?.includes('429') || error.message?.includes('quota') || error.message?.includes('RESOURCE_EXHAUSTED');
-                const isNetwork = error.message?.includes('network') || error.message?.includes('fetch failed');
+                const errorMsg = error.message || JSON.stringify(error);
+                const isRateLimit = errorMsg.includes('429') || errorMsg.includes('quota') || errorMsg.includes('RESOURCE_EXHAUSTED');
+                const isNetwork = errorMsg.includes('network') || errorMsg.includes('fetch failed');
 
                 if ((isRateLimit || isNetwork) && retries < MAX_RETRIES) {
                     retries++;
                     const waitTime = isRateLimit ? 60000 : 10000; // 60s for rate limit, 10s for network
                     console.log(`Encountered error. Retrying Chapter ${chapter.id} in ${waitTime/1000}s...`);
                     await new Promise(resolve => setTimeout(resolve, waitTime));
-                    continue; // Retry loop
+                    continue; 
                 }
 
                 // If exhausted retries or other error
@@ -896,7 +980,7 @@ const App: React.FC = () => {
             </header>
             <main className="flex-1">
                 <SettingsForm 
-                    key={state.settings.id || 'new'}
+                    key={`${state.settings.id || 'new'}-${resetKey}`}
                     settings={state.settings}
                     onSettingsChange={handleSettingsChange}
                     onSubmit={generateOutlineAndCharacters}
@@ -976,18 +1060,21 @@ const App: React.FC = () => {
                                             <button
                                             key={chapter.id}
                                             onClick={() => selectChapter(chapter.id)}
-                                            className={`w-full text-left px-5 py-2 border-l-4 transition-colors ${
+                                            className={`w-full text-left px-5 py-2 border-l-4 transition-all duration-300 relative overflow-hidden ${
                                                 state.currentChapterId === chapter.id
                                                 ? 'bg-indigo-50 border-indigo-500'
                                                 : 'border-transparent hover:bg-gray-50'
                                             }`}
                                             >
-                                            <div className="flex items-start justify-between">
-                                                <div className="overflow-hidden">
+                                            {chapter.isGenerating && (
+                                                <div className="absolute inset-0 bg-indigo-100/50 animate-pulse pointer-events-none" />
+                                            )}
+                                            <div className="flex items-start justify-between relative z-10">
+                                                <div className="overflow-hidden flex-1 mr-2">
                                                 <span className={`text-[10px] font-bold uppercase tracking-wider mb-0.5 block ${state.currentChapterId === chapter.id ? 'text-indigo-600' : 'text-gray-400'}`}>
                                                     Chapter {chapter.id}
                                                 </span>
-                                                <span className={`text-xs font-medium block truncate w-40 ${state.currentChapterId === chapter.id ? 'text-gray-900' : 'text-gray-700'}`} title={chapter.title}>
+                                                <span className={`text-xs font-medium block truncate ${state.currentChapterId === chapter.id ? 'text-gray-900' : 'text-gray-700'}`} title={chapter.title}>
                                                     {chapter.title}
                                                 </span>
                                                 {chapter.content && (
@@ -996,9 +1083,9 @@ const App: React.FC = () => {
                                                     </span>
                                                 )}
                                                 </div>
-                                                <div className="mt-1 flex items-center space-x-1">
+                                                <div className="mt-1 flex items-center space-x-1 shrink-0">
                                                 {chapter.isGenerating ? (
-                                                    <div className="w-3 h-3 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin"></div>
+                                                    <Loader2 className="w-3 h-3 text-indigo-600 animate-spin" />
                                                 ) : chapter.isDone ? (
                                                     <CheckCircle2 className="w-3 h-3 text-green-500" />
                                                 ) : (
@@ -1103,8 +1190,9 @@ const App: React.FC = () => {
                     settings={state.settings}
                     appearance={appearance}
                     onAppearanceChange={handleAppearanceChange}
-                    onGenerate={generateChapterContent}
-                    onBack={handleCreateNew}
+                    onGenerate={() => generateChapterContent(false)}
+                    onRewrite={() => generateChapterContent(true)}
+                    onBack={() => handleCreateNew(true)}
                     onUpdateContent={handleUpdateChapter}
                     characters={state.characters}
                 />
@@ -1119,7 +1207,7 @@ const App: React.FC = () => {
         novels={savedNovels}
         currentNovelId={state.settings.id}
         onSelect={handleLoadNovel}
-        onCreate={handleCreateNew}
+        onCreate={() => handleCreateNew(false)}
         onDelete={handleDeleteNovel}
         settings={state.settings}
         onSettingsChange={handleSettingsChange}

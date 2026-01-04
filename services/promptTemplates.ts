@@ -23,8 +23,11 @@ Premise: {{premise}}.
 {{genreGuide}}
 {{world}}
 {{characters}}
-IMPORTANT - STRUCTURE: {{structure}}
-For each chapter, provide 'id', 'title', and 'summary'.`,
+
+CONTEXT & CONTINUITY:
+{{paginationContext}}
+
+IMPORTANT - STRUCTURE: {{structure}}`,
 
     [PROMPT_KEYS.GENERATE_CHAPTER]: `{{task}}
 {{language}}

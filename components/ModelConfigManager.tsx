@@ -80,7 +80,13 @@ const ModelConfigManager: React.FC<ModelConfigManagerProps> = ({ settings, onSet
             baseUrl: config.baseUrl,
             maxOutputTokens: config.maxOutputTokens
         });
-        alert(`已启用配置: ${config.name}`);
+        
+        // Persist as global preference for new novels
+        if (config.id) {
+            localStorage.setItem('active_model_config_id', config.id);
+        }
+        
+        alert(`已启用配置: ${config.name} (已设为默认)`);
     };
 
     // Check if a config is currently active (heuristic matching)
