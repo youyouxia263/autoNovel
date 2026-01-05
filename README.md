@@ -3,6 +3,10 @@
 
 <img width="3075" height="1679" alt="image" src="https://github.com/user-attachments/assets/a240dc0e-dc14-4687-8287-9d78499f0871" />
 
+<img width="1661" height="516" alt="image" src="https://github.com/user-attachments/assets/c1f37434-e672-4779-8f28-d4f0d6a286db" />
+<img width="2715" height="1706" alt="image" src="https://github.com/user-attachments/assets/a0a3e9cc-22f3-46ef-8665-6ad0c1c9d7dd" />
+<img width="1224" height="741" alt="image" src="https://github.com/user-attachments/assets/80440b2a-f25e-4676-a6dc-36dfc19a0522" />
+
 
 An AI-powered novel generation assistant specializing in suspense and romance genres. Generates outlines, characters, and writes chapters with customizable styling.
 
