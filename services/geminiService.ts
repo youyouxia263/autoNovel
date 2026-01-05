@@ -176,6 +176,7 @@ async function* streamOpenAICompatible(
     systemInstruction?: string, 
     temperature: number = 0.7, 
     maxTokens?: number, 
+    signal?: AbortSignal,
     onUsage?: (u: {input: number, output: number}) => void
 ): AsyncGenerator<string, void, unknown> {
   const headers = {
@@ -200,8 +201,9 @@ async function* streamOpenAICompatible(
   
   // Retry loop for stream init
   for(let i=0; i<5; i++) {
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
       try {
-        response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+        response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal });
         if (!response.ok) {
              const errorText = await response.text();
              let errorMsg = errorText;
@@ -231,13 +233,19 @@ async function* streamOpenAICompatible(
                  await wait(2000 * Math.pow(2, i));
                  continue;
              }
+             
+             // Check for Aliyun content safety error or similar 400s that shouldn't be retried
+             if (response.status === 400 && (errorMsg.includes('inappropriate content') || errorMsg.includes('data_inspection_failed'))) {
+                 throw new Error(`Content Safety Error: ${errorMsg}`);
+             }
 
              throw new Error(`Provider API Error: ${response.status} ${errorMsg}`);
         }
         break; 
       } catch (e: any) {
           const msg = e.message || '';
-          if (msg.includes("401") || msg.includes("404")) throw e;
+          if (msg.includes("401") || msg.includes("404") || msg.includes("Content Safety")) throw e;
+          if (e.name === 'AbortError') throw e;
           // Retry on network errors or rate limit errors caught as exceptions
           if (i === 4) throw e;
           const delay = msg.includes("Rate Limit") ? 5000 * Math.pow(2, i) : 2000 * Math.pow(2, i);
@@ -250,26 +258,35 @@ async function* streamOpenAICompatible(
   const decoder = new TextDecoder();
   let buffer = '';
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith('data: ')) continue;
-      const dataStr = trimmed.slice(6);
-      if (dataStr === '[DONE]') continue;
-      try {
-        const json = JSON.parse(dataStr);
-        if (json.usage && onUsage) {
-            onUsage({ input: json.usage.prompt_tokens || 0, output: json.usage.completion_tokens || 0 });
+  try {
+      while (true) {
+        if (signal?.aborted) {
+            reader.cancel();
+            throw new DOMException('Aborted', 'AbortError');
         }
-        const content = json.choices?.[0]?.delta?.content;
-        if (content) yield content;
-      } catch (e) {}
-    }
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data: ')) continue;
+          const dataStr = trimmed.slice(6);
+          if (dataStr === '[DONE]') continue;
+          try {
+            const json = JSON.parse(dataStr);
+            if (json.usage && onUsage) {
+                onUsage({ input: json.usage.prompt_tokens || 0, output: json.usage.completion_tokens || 0 });
+            }
+            const content = json.choices?.[0]?.delta?.content;
+            if (content) yield content;
+          } catch (e) {}
+        }
+      }
+  } catch (e) {
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      throw e;
   }
 }
 
@@ -294,6 +311,9 @@ async function fetchOpenAICompatible(url: string, apiKey: string, model: string,
             if (response.status === 429) {
                  throw new Error(`429 RESOURCE_EXHAUSTED: ${msg}`); // Trigger withRetry logic
             }
+            if (response.status === 400 && (msg.includes('inappropriate content') || msg.includes('data_inspection_failed'))) {
+                 throw new Error(`Content Safety Error: ${msg}`);
+            }
             throw new Error(`API Error: ${response.status} ${msg}`);
         }
         const json = await response.json();
@@ -302,7 +322,7 @@ async function fetchOpenAICompatible(url: string, apiKey: string, model: string,
     }, 5); // Increased retries for compatible endpoints
 }
 
-// --- Helper: Construct Genre String from Tomato Novel Settings ---
+// ... (rest of helper functions unchanged until generateChapterStream)
 const buildGenreString = (settings: NovelSettings): string => {
     let genreStr = `主分类: ${settings.mainCategory}`;
     if (settings.themes && settings.themes.length > 0) {
@@ -352,7 +372,7 @@ const getBaseUrl = (settings: NovelSettings) => {
     return "";
 }
 
-// --- Main Outline Generator with Pagination ---
+// ... (rest of generateOutline unchanged)
 
 export const generateOutline = async (settings: NovelSettings, signal?: AbortSignal, onUsage?: (u: {input: number, output: number}) => void): Promise<Omit<Chapter, 'content' | 'isGenerating' | 'isDone'>[]> => {
   const { model, apiKey, provider } = getModelConfig(settings);
@@ -533,7 +553,7 @@ export const generateOutline = async (settings: NovelSettings, signal?: AbortSig
   return allChapters;
 };
 
-// --- New Service Functions ---
+// ... (New Service Functions section)
 
 const runSimpleGeneration = async (promptText: string, settings: NovelSettings, systemInstruction: string = "You are a helpful assistant.", useJson = false) => {
     const { model, apiKey, provider } = getModelConfig(settings);
@@ -799,7 +819,7 @@ export const autoCorrectGrammar = async (content: string, settings: NovelSetting
     return runSimpleGeneration(prompt, settings);
 };
 
-export async function* generateChapterStream(settings: NovelSettings, chapter: Chapter, storySummaries: string, previousContent: string, characters: Character[], onUsage?: any): AsyncGenerator<string, void, unknown> {
+export async function* generateChapterStream(settings: NovelSettings, chapter: Chapter, storySummaries: string, previousContent: string, characters: Character[], signal?: AbortSignal, onUsage?: any): AsyncGenerator<string, void, unknown> {
     const { model, apiKey, provider } = getModelConfig(settings);
     const template = getPromptTemplate(PROMPT_KEYS.GENERATE_CHAPTER, settings);
     const charStr = characters.map(c => `${c.name} (${c.role}): ${c.description}`).join('\n');
@@ -821,6 +841,7 @@ export async function* generateChapterStream(settings: NovelSettings, chapter: C
 
     if (provider === 'gemini') {
         const ai = new GoogleGenAI({ apiKey });
+        // Gemini SDK doesn't support signal directly in generateContentStream yet as cleanly as fetch, but we can wrap iterator
         const stream = await ai.models.generateContentStream({ 
             model, 
             contents: prompt, 
@@ -831,6 +852,7 @@ export async function* generateChapterStream(settings: NovelSettings, chapter: C
         });
         
         for await (const chunk of stream) {
+            if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
             const c = chunk as GenerateContentResponse;
             if (c.usageMetadata && onUsage) {
                 onUsage({ input: 0, output: c.usageMetadata.candidatesTokenCount || 0 });
@@ -839,14 +861,14 @@ export async function* generateChapterStream(settings: NovelSettings, chapter: C
         }
     } else {
         const url = getBaseUrl(settings);
-        const stream = streamOpenAICompatible(url, apiKey, model, [{role: 'user', content: prompt}], systemInstruction, 0.7, settings.maxOutputTokens, onUsage);
+        const stream = streamOpenAICompatible(url, apiKey, model, [{role: 'user', content: prompt}], systemInstruction, 0.7, settings.maxOutputTokens, signal, onUsage);
         for await (const chunk of stream) {
             yield chunk;
         }
     }
 }
 
-export async function* extendChapter(currentContent: string, settings: NovelSettings, chapterTitle: string, characters: Character[], targetWordCount: number, currentWordCount: number, onUsage?: any): AsyncGenerator<string, void, unknown> {
+export async function* extendChapter(currentContent: string, settings: NovelSettings, chapterTitle: string, characters: Character[], targetWordCount: number, currentWordCount: number, signal?: AbortSignal, onUsage?: any): AsyncGenerator<string, void, unknown> {
     const { model, apiKey, provider } = getModelConfig(settings);
     const prompt = `The chapter "${chapterTitle}" is currently ${currentWordCount} words long, but needs to be at least ${targetWordCount} words.
     
@@ -861,13 +883,14 @@ export async function* extendChapter(currentContent: string, settings: NovelSett
         const ai = new GoogleGenAI({ apiKey });
         const stream = await ai.models.generateContentStream({ model, contents: prompt, config: { maxOutputTokens: settings.maxOutputTokens } });
         for await (const chunk of stream) {
+             if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
              const c = chunk as GenerateContentResponse;
              if (c.usageMetadata && onUsage) onUsage({ input: 0, output: c.usageMetadata.candidatesTokenCount || 0 });
              if ((c as any).text) yield (c as any).text;
         }
     } else {
         const url = getBaseUrl(settings);
-        const stream = streamOpenAICompatible(url, apiKey, model, [{role: 'user', content: prompt}], undefined, 0.7, settings.maxOutputTokens, onUsage);
+        const stream = streamOpenAICompatible(url, apiKey, model, [{role: 'user', content: prompt}], undefined, 0.7, settings.maxOutputTokens, signal, onUsage);
         for await (const chunk of stream) {
             yield chunk;
         }
@@ -875,34 +898,82 @@ export async function* extendChapter(currentContent: string, settings: NovelSett
 }
 
 export const summarizeChapter = async (content: string, settings: NovelSettings, onUsage?: any): Promise<string> => {
-    const prompt = `Summarize this chapter in 3-5 sentences.
-    "${content.slice(0, 10000)}..."`;
-    const result = await runSimpleGeneration(prompt, settings);
-    return result;
-}
+    const { model, apiKey, provider } = getModelConfig(settings);
+    const prompt = `Summarize the following chapter content into a concise paragraph (max 200 words).
+    Focus on key plot events and character developments.
+    ${settings.language === 'zh' ? "Output: Chinese" : "Output: English"}
+
+    Content:
+    "${content.slice(0, 15000)}"`;
+
+    if (provider === 'gemini') {
+        const ai = new GoogleGenAI({ apiKey });
+        const config: any = {};
+        if (settings.maxOutputTokens) config.maxOutputTokens = settings.maxOutputTokens;
+        
+        const response = await withRetry(() => ai.models.generateContent({ model, contents: prompt, config }));
+        if ((response as any).usageMetadata && onUsage) {
+            onUsage({ input: (response as any).usageMetadata.promptTokenCount || 0, output: (response as any).usageMetadata.candidatesTokenCount || 0 });
+        }
+        return (response as any).text || "";
+    } else {
+        const url = getBaseUrl(settings);
+        const text = await fetchOpenAICompatible(url, apiKey, model, [{role: 'user', content: prompt}], undefined, undefined, settings.maxOutputTokens, onUsage);
+        return text;
+    }
+};
 
 export const checkConsistency = async (content: string, characters: Character[], settings: NovelSettings, onUsage?: any): Promise<string> => {
+    const { model, apiKey, provider } = getModelConfig(settings);
     const template = getPromptTemplate(PROMPT_KEYS.CHECK_CONSISTENCY, settings);
-    const charStr = characters.map(c => `${c.name}: ${c.description}, Relationships: ${c.relationships}`).join('\n');
+    const charStr = characters.map(c => `${c.name} (${c.role}): ${c.description}`).join('\n');
+    
     const prompt = fillPrompt(template, {
         characters: charStr,
-        content: content.slice(0, 8000)
+        content: content.slice(0, 20000)
     });
-    
-    // Using a simpler prompt if template is default
-    const fullPrompt = prompt + "\nIdentify any inconsistencies in character behavior, plot holes, or factual errors relative to the profiles. If consistent, output 'Consistent'.";
-    
-    return runSimpleGeneration(fullPrompt, settings);
-}
+
+    if (provider === 'gemini') {
+        const ai = new GoogleGenAI({ apiKey });
+        const config: any = {};
+        if (settings.maxOutputTokens) config.maxOutputTokens = settings.maxOutputTokens;
+        
+        const response = await withRetry(() => ai.models.generateContent({ model, contents: prompt, config }));
+        if ((response as any).usageMetadata && onUsage) {
+            onUsage({ input: (response as any).usageMetadata.promptTokenCount || 0, output: (response as any).usageMetadata.candidatesTokenCount || 0 });
+        }
+        return (response as any).text || "Analysis failed.";
+    } else {
+         const url = getBaseUrl(settings);
+         const text = await fetchOpenAICompatible(url, apiKey, model, [{role: 'user', content: prompt}], undefined, undefined, settings.maxOutputTokens, onUsage);
+         return text;
+    }
+};
 
 export const fixChapterConsistency = async (content: string, characters: Character[], analysis: string, settings: NovelSettings, onUsage?: any): Promise<string> => {
+    const { model, apiKey, provider } = getModelConfig(settings);
     const template = getPromptTemplate(PROMPT_KEYS.FIX_CONSISTENCY, settings);
-    const charStr = characters.map(c => `${c.name}: ${c.description}`).join('\n');
-    const prompt = fillPrompt(template, {
-        characters: charStr,
-        content: content,
-        analysis: analysis
-    });
+    const charStr = characters.map(c => `${c.name} (${c.role}): ${c.description}`).join('\n');
     
-    return runSimpleGeneration(prompt, settings);
-}
+    const prompt = fillPrompt(template, {
+        analysis: analysis,
+        characters: charStr,
+        content: content
+    });
+
+    if (provider === 'gemini') {
+        const ai = new GoogleGenAI({ apiKey });
+        const config: any = {};
+        if (settings.maxOutputTokens) config.maxOutputTokens = settings.maxOutputTokens;
+        
+        const response = await withRetry(() => ai.models.generateContent({ model, contents: prompt, config }));
+        if ((response as any).usageMetadata && onUsage) {
+            onUsage({ input: (response as any).usageMetadata.promptTokenCount || 0, output: (response as any).usageMetadata.candidatesTokenCount || 0 });
+        }
+        return (response as any).text || content;
+    } else {
+        const url = getBaseUrl(settings);
+        const text = await fetchOpenAICompatible(url, apiKey, model, [{role: 'user', content: prompt}], undefined, undefined, settings.maxOutputTokens, onUsage);
+        return text;
+    }
+};

@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { AppearanceSettings, Chapter, NovelSettings, GrammarIssue, Character } from '../types';
-import { Type, AlignLeft, AlignJustify, Moon, Sun, Monitor, ArrowUpDown, Home, ChevronRight, Edit3, Save, X, Sparkles, Loader2, AlertTriangle, FileText, BookOpen, Copy, Check, SpellCheck, PenLine, FileCode, RefreshCw } from 'lucide-react';
+import { Type, AlignLeft, AlignJustify, Moon, Sun, Monitor, ArrowUpDown, Home, ChevronRight, Edit3, Save, X, Sparkles, Loader2, AlertTriangle, FileText, BookOpen, Copy, Check, SpellCheck, PenLine, FileCode, RefreshCw, Square } from 'lucide-react';
 import { continueWriting, checkGrammar, autoCorrectGrammar } from '../services/geminiService';
 import GrammarReport from './GrammarReport';
 
@@ -14,7 +14,8 @@ interface ReaderProps {
   onRewrite: () => void;
   onBack: () => void;
   onUpdateContent: (id: number, content: string) => void;
-  characters?: Character[]; // New prop
+  characters?: Character[];
+  onStop?: () => void; // New prop for stopping generation
 }
 
 const Reader: React.FC<ReaderProps> = ({ 
@@ -26,16 +27,16 @@ const Reader: React.FC<ReaderProps> = ({
   onRewrite,
   onBack,
   onUpdateContent,
-  characters = []
+  characters = [],
+  onStop
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
   const [isAiWriting, setIsAiWriting] = useState(false);
-  const [streamingContent, setStreamingContent] = useState(''); // Buffer for AI text
+  const [streamingContent, setStreamingContent] = useState('');
   const [copySuccess, setCopySuccess] = useState(false);
   const [mdCopySuccess, setMdCopySuccess] = useState(false);
   
-  // Grammar Check State
   const [isCheckingGrammar, setIsCheckingGrammar] = useState(false);
   const [grammarIssues, setGrammarIssues] = useState<GrammarIssue[]>([]);
   const [showGrammarReport, setShowGrammarReport] = useState(false);
@@ -44,25 +45,20 @@ const Reader: React.FC<ReaderProps> = ({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const contentEndRef = useRef<HTMLDivElement>(null);
 
-  // Sync edit content when chapter changes or when entering edit mode
   useEffect(() => {
     if (chapter) {
         setEditContent(chapter.content || '');
-        // If chapter changes, exit edit mode
         setIsEditing(false);
         setStreamingContent('');
     }
   }, [chapter?.id, chapter?.content]);
 
-  // Auto-scroll to bottom when AI is writing (streaming) or editing
   useEffect(() => {
     if (isAiWriting || (chapter && chapter.isGenerating)) {
         requestAnimationFrame(() => {
-             // If in read mode (likely), scroll the div
              if (contentEndRef.current) {
                  contentEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
              }
-             // If in edit mode (fallback), scroll textarea
             if (textareaRef.current) {
                 textareaRef.current.scrollTop = textareaRef.current.scrollHeight;
             }
@@ -89,15 +85,10 @@ const Reader: React.FC<ReaderProps> = ({
 
   const handleAiContinue = async () => {
     if (!chapter) return;
-    
-    // 1. Prepare context. Use current edit content if available, otherwise chapter content.
     let baseContent = isEditing ? editContent : (chapter.content || '');
     if (baseContent && !baseContent.endsWith('\n')) {
         baseContent += '\n';
     }
-
-    // 2. Switch to view mode to show the fancy streaming styles
-    // If we were editing, update the chapter content first so the view mode isn't stale
     if (isEditing) {
         onUpdateContent(chapter.id, baseContent);
     }
@@ -106,20 +97,15 @@ const Reader: React.FC<ReaderProps> = ({
     setStreamingContent(''); 
 
     try {
-        // Pass characters to continueWriting
         const stream = continueWriting(baseContent, settings, chapter.title, characters);
         let accumulated = '';
-        
         for await (const chunk of stream) {
             accumulated += chunk;
             setStreamingContent(accumulated);
         }
-
-        // 3. Finalize
         const finalContent = baseContent + accumulated;
         setEditContent(finalContent);
         onUpdateContent(chapter.id, finalContent);
-
     } catch (e: any) {
         console.error("AI writing failed", e);
         alert(`AI assistant encountered an error: ${e.message}`);
@@ -132,7 +118,6 @@ const Reader: React.FC<ReaderProps> = ({
   const handleCopy = async () => {
     if (!chapter?.content && !editContent) return;
     const textToCopy = isEditing ? editContent : chapter?.content || '';
-    
     try {
         await navigator.clipboard.writeText(textToCopy);
         setCopySuccess(true);
@@ -145,10 +130,7 @@ const Reader: React.FC<ReaderProps> = ({
   const handleCopyMarkdown = async () => {
     if (!chapter?.content && !editContent) return;
     const content = isEditing ? editContent : chapter?.content || '';
-    
-    // Construct a nice Markdown format
     const markdown = `# ${chapter?.title}\n\n${content}`;
-    
     try {
         await navigator.clipboard.writeText(markdown);
         setMdCopySuccess(true);
@@ -161,7 +143,6 @@ const Reader: React.FC<ReaderProps> = ({
   const handleGrammarCheck = async () => {
       const textToCheck = isEditing ? editContent : chapter?.content;
       if (!textToCheck) return;
-
       setIsCheckingGrammar(true);
       try {
           const issues = await checkGrammar(textToCheck, settings);
@@ -178,7 +159,6 @@ const Reader: React.FC<ReaderProps> = ({
   const handleAutoFixGrammar = async () => {
       const textToFix = isEditing ? editContent : chapter?.content;
       if (!chapter || !textToFix) return;
-
       setIsFixingGrammar(true);
       try {
           const fixed = await autoCorrectGrammar(textToFix, settings);
@@ -198,7 +178,6 @@ const Reader: React.FC<ReaderProps> = ({
 
   const getWordCount = (text: string) => {
     if (!text) return 0;
-    // Heuristic: for mostly Chinese content, count characters. For English, count words.
     const nonAscii = (text.match(/[^\x00-\x7F]/g) || []).length;
     if (nonAscii > text.length * 0.5) {
         return text.replace(/\s/g, '').length;
@@ -237,7 +216,7 @@ const Reader: React.FC<ReaderProps> = ({
   const displayWordCount = getWordCount(currentText + streamingContent);
   const targetWords = settings.targetWordCount && settings.novelType === 'short' 
       ? settings.targetWordCount 
-      : 4000; // Default per chapter target for long novels
+      : 4000;
   const progressPercent = Math.min(100, Math.round((displayWordCount / targetWords) * 100));
   const isBusy = isAiWriting || chapter.isGenerating;
 
@@ -261,6 +240,15 @@ const Reader: React.FC<ReaderProps> = ({
               <span className="text-xs font-semibold text-indigo-700">
                   AI 正在创作中... ({progressPercent}%)
               </span>
+              {onStop && (
+                  <button 
+                    onClick={onStop} 
+                    className="ml-2 p-1 hover:bg-red-50 text-red-500 rounded-full transition-colors"
+                    title="Stop Generation"
+                  >
+                      <Square size={12} className="fill-current" />
+                  </button>
+              )}
           </div>
       )}
 
@@ -297,7 +285,6 @@ const Reader: React.FC<ReaderProps> = ({
         <div className="flex items-center space-x-2">
             {!isEditing ? (
                 <>
-                {/* View Mode Controls */}
                 <select 
                 value={appearance.fontFamily}
                 onChange={(e) => onAppearanceChange({ fontFamily: e.target.value as any })}
@@ -343,7 +330,6 @@ const Reader: React.FC<ReaderProps> = ({
                     <>
                     <div className="h-4 w-px bg-current opacity-20 mx-2"></div>
                     
-                    {/* Markdown Copy */}
                     <button
                         onClick={handleCopyMarkdown}
                         className="p-1.5 rounded-md hover:bg-black/5 text-gray-500 hover:text-indigo-600 transition-colors relative group"
@@ -410,7 +396,6 @@ const Reader: React.FC<ReaderProps> = ({
                 </>
             ) : (
                 <div className="flex items-center space-x-2 w-full justify-end">
-                     {/* Edit Mode Controls */}
                     <button 
                         onClick={handleAiContinue}
                         disabled={isAiWriting}
@@ -440,7 +425,6 @@ const Reader: React.FC<ReaderProps> = ({
         </div>
       </div>
 
-      {/* Editor / Viewer Content Area */}
       <div className="flex-1 relative w-full h-full min-h-0">
         {isEditing ? (
            <textarea
@@ -457,10 +441,8 @@ const Reader: React.FC<ReaderProps> = ({
              {chapter.content || chapter.isGenerating || streamingContent ? (
                 <div className="whitespace-pre-wrap max-w-3xl mx-auto pb-20">
                    <h1 className="text-3xl font-bold mb-8 text-center">{chapter.title}</h1>
-                   {/* Main Content */}
                    <span>{chapter.content}</span>
                    
-                   {/* Streaming Content (Visual Indicator) */}
                    {streamingContent && (
                         <span className={`inline relative font-serif italic ${
                             appearance.theme === 'dark' ? 'text-indigo-300' : 'text-indigo-700'
@@ -470,7 +452,6 @@ const Reader: React.FC<ReaderProps> = ({
                         </span>
                    )}
                    
-                   {/* Fallback cursor if just waiting */}
                    {(chapter.isGenerating || isAiWriting) && !streamingContent && (
                       <div className="flex flex-col items-center justify-center py-8 space-y-3 opacity-50">
                           <Loader2 className="w-8 h-8 animate-spin text-indigo-500" />
@@ -497,7 +478,6 @@ const Reader: React.FC<ReaderProps> = ({
         )}
       </div>
 
-      {/* Grammar Modal */}
       <GrammarReport 
         isOpen={showGrammarReport}
         onClose={() => setShowGrammarReport(false)}
