@@ -1,6 +1,9 @@
 
 # DreamWeaver Novelist (小说生成器)
 
+<img width="3075" height="1679" alt="image" src="https://github.com/user-attachments/assets/a240dc0e-dc14-4687-8287-9d78499f0871" />
+
+
 An AI-powered novel generation assistant specializing in suspense and romance genres. Generates outlines, characters, and writes chapters with customizable styling.
 
 ## Features
